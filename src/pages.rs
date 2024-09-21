@@ -55,7 +55,6 @@ impl Index<'_> {
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum Expiration {
     None,
-    Burn,
     Time(NonZeroU32),
 }
 
@@ -63,7 +62,6 @@ impl std::fmt::Display for Expiration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expiration::None => write!(f, ""),
-            Expiration::Burn => write!(f, "burn"),
             Expiration::Time(t) => write!(f, "{t}"),
         }
     }
@@ -79,7 +77,7 @@ macro_rules! nonzero {
     };
 }
 
-const EXPIRATION_OPTIONS: [(&str, Expiration); 8] = [
+const EXPIRATION_OPTIONS: [(&str, Expiration); 7] = [
     ("never", Expiration::None),
     ("10 minutes", Expiration::Time(nonzero!(600))),
     ("1 hour", Expiration::Time(nonzero!(3600))),
@@ -87,7 +85,6 @@ const EXPIRATION_OPTIONS: [(&str, Expiration); 8] = [
     ("1 week", Expiration::Time(nonzero!(604_800))),
     ("1 month", Expiration::Time(nonzero!(2_592_000))),
     ("1 year", Expiration::Time(nonzero!(31_536_000))),
-    ("🔥 after reading", Expiration::Burn),
 ];
 
 impl Index<'_> {
@@ -103,7 +100,6 @@ impl Index<'_> {
 
             for (opt_name, opt_val) in EXPIRATION_OPTIONS {
                 if self.max_expiration.is_none()
-                    || opt_val == Expiration::Burn
                     || matches!((self.max_expiration, opt_val), (Some(exp), Expiration::Time(time)) if time <= exp)
                 {
                     option_set.push_str("<option");

@@ -15,12 +15,21 @@ pub struct Entry {
     pub text: String,
     pub extension: Option<String>,
     pub expires: String,
+    pub burn: Option<String>,
     pub password: String,
 }
 
 impl From<Entry> for write::Entry {
     fn from(entry: Entry) -> Self {
-        let burn_after_reading = Some(entry.expires == "burn");
+        let burn_after_reading = match entry.burn.as_deref() {
+            Some("on") => true,
+            None => false,
+            Some(x) => {
+                tracing::error!("Invalid checkbox value '{x}', treating as burn");
+                true
+            }
+        };
+        let burn_after_reading = Some(burn_after_reading);
         let password = (!entry.password.is_empty()).then_some(entry.password);
 
         let expires = match entry.expires.parse::<NonZeroU32>() {
@@ -68,8 +77,7 @@ pub async fn insert(
 
     let mut url = id.to_url_path(&entry);
 
-    let burn_after_reading = entry.burn_after_reading.unwrap_or(false);
-    if burn_after_reading {
+    if entry.burn_after_reading.unwrap_or(false) {
         url = format!("burn/{url}");
     }
 
