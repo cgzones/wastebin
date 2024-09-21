@@ -153,7 +153,6 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         max_expiration,
     };
 
-    tracing::debug!("serving on {addr}");
     tracing::debug!("caching {cache_size} paste highlights");
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
@@ -161,6 +160,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
 
     let service = make_app(max_body_size, timeout).with_state(state);
     let listener = TcpListener::bind(&addr).await?;
+
+    tracing::info!("Listening on {addr}");
 
     axum::serve(listener, service)
         .with_graceful_shutdown(shutdown_signal())
