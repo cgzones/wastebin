@@ -53,6 +53,7 @@ mod tests {
             text: "FooBarBaz".to_string(),
             extension: Some("rs".to_string()),
             expires: "0".to_string(),
+            burn: None,
             password: "".to_string(),
         };
 
@@ -113,7 +114,8 @@ mod tests {
         let data = routes::form::Entry {
             text: "FooBarBaz".to_string(),
             extension: None,
-            expires: "burn".to_string(),
+            expires: "0".to_string(),
+            burn: Some("on".to_string()),
             password: "".to_string(),
         };
 
@@ -152,7 +154,8 @@ mod tests {
         let data = routes::form::Entry {
             text: "FooBarBaz".to_string(),
             extension: None,
-            expires: "burn".to_string(),
+            expires: "0".to_string(),
+            burn: Some("on".to_string()),
             password: password.to_string(),
         };
 
@@ -270,6 +273,7 @@ mod tests {
             text: "FooBarBaz".to_string(),
             extension: None,
             expires: "0".to_string(),
+            burn: None,
             password: "".to_string(),
         };
 
@@ -310,6 +314,7 @@ mod tests {
             text: "FooBarBaz".to_string(),
             extension: None,
             expires: "0".to_string(),
+            burn: None,
             password: "".to_string(),
         };
 
