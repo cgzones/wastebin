@@ -109,9 +109,13 @@ fn highlight(source: &str, ext: &str) -> Result<String, Error> {
             html.push_str(&"<span>".repeat(delta.abs().try_into()?));
         }
 
-        // Strip stray newlines that cause vertically stretched lines.
-        for c in formatted.chars().filter(|c| *c != '\n') {
-            html.push(c);
+        if delta == 0 && formatted.is_empty() {
+            html.push_str(r#"<span class="text plain">\r</span>"#);
+        } else {
+            // Strip stray newlines that cause vertically stretched lines.
+            for c in formatted.chars().filter(|c| *c != '\n') {
+                html.push(c);
+            }
         }
 
         if delta > 0 {
