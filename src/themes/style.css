@@ -52,6 +52,7 @@ header {
   justify-content: flex-end;
   align-items: center;
   padding: 0 1em 0 1em;
+  user-select: none;
 }
 
 main {
@@ -311,6 +312,7 @@ td.line-number {
   white-space: pre;
   margin-top: 0px;
   margin-bottom: 0px;
+  user-select: text;
 }
 
 .center {
