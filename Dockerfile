@@ -1,36 +1,8 @@
-# Cross-compile Dockerfile supporting both x86_64-unknown-linux-musl and
-# aarch64-unknown-linux-musl targets using zig to link against musl libc. Note
-# that this is to be used from an x86_64 host.
-
 # --- build image
 
-FROM rust:1.90 AS builder
+FROM docker.io/rust:alpine AS builder
 
-RUN rustup target add \
-    aarch64-unknown-linux-musl \
-    x86_64-unknown-linux-musl
-
-RUN update-ca-certificates
-
-ENV ZIGVERSION=0.15.2
-
-RUN wget https://ziglang.org/download/$ZIGVERSION/zig-x86_64-linux-$ZIGVERSION.tar.xz && \
-    tar -C /usr/local --strip-components=1 -xf zig-x86_64-linux-$ZIGVERSION.tar.xz && \
-    mv /usr/local/zig /usr/local/bin && \
-    rm zig-x86_64-linux-$ZIGVERSION.tar.xz
-
-RUN cargo install --locked cargo-zigbuild
-
-WORKDIR /app
-
-COPY . .
-
-RUN cargo zigbuild \
-    --release \
-    --target aarch64-unknown-linux-musl \
-    --target x86_64-unknown-linux-musl \
-    --bin wastebin \
-    --bin wastebin-ctl
+RUN apk add musl-dev
 
 RUN adduser \
     --disabled-password \
@@ -41,29 +13,24 @@ RUN adduser \
     --uid "10001" \
     "app"
 
+WORKDIR /app
+COPY . .
 
-# --- x86_64-unknown-linux-musl final image
+WORKDIR /app/crates/wastebin_server
+RUN cargo install --path .
 
-FROM scratch AS amd64
+WORKDIR /app/crates/wastebin_ctl
+RUN cargo install --no-default-features --path .
+
+# --- final image
+
+FROM scratch
 
 COPY --from=builder /etc/passwd /etc/passwd
 COPY --from=builder /etc/group /etc/group
 
 WORKDIR /app
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/wastebin ./
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/wastebin-ctl ./
-USER app:app
-CMD ["/app/wastebin"]
-
-# --- aarch64-unknown-linux-musl final image
-
-FROM scratch AS arm64
-
-COPY --from=builder /etc/passwd /etc/passwd
-COPY --from=builder /etc/group /etc/group
-
-WORKDIR /app
-COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/wastebin ./
-COPY --from=builder /app/target/aarch64-unknown-linux-musl/release/wastebin-ctl ./
+COPY --from=builder /usr/local/cargo/bin/wastebin /app/wastebin
+COPY --from=builder /usr/local/cargo/bin/wastebin-ctl /app/wastebin-ctl
 USER app:app
 CMD ["/app/wastebin"]
