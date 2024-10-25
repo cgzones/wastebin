@@ -121,20 +121,15 @@ cargo run --release
 ### Build a container image
 
 It is possible to build a container image using Docker or Podman. The
-`Dockerfile` is designed to be run on an x86_64 host but capable of building
-images for both x86_64 and aarch64 via the `--target` flag:
+`Dockerfile` builds a single image for the host architecture:
 
 ```bash
 # Docker
-docker build -t wastebin:v3.0.0 -f Dockerfile --target amd64 .
-docker build -t wastebin:v3.0.0 -f Dockerfile --target arm64 .
+docker build -t wastebin:v3.0.0 -f Dockerfile .
 
 # Podman
-podman build -t wastebin:v3.0.0 -f Dockerfile --target amd64
-podman build -t wastebin:v3.0.0 -f Dockerfile --target arm64
+podman build -t wastebin:v3.0.0 -f Dockerfile .
 ```
-
-Note that you *cannot* build aarch64 images on aarch64 hosts with it.
 
 To interact with a running wastebin instance the bundled `wastebin-ctl` tool can
 be used, e.g.:
