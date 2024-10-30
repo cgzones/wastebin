@@ -36,5 +36,7 @@ used_underscore_binding = "deny"
 opt-level = 3
 
 [profile.release]
-strip = "debuginfo"
-lto = "fat"
+lto = true
+strip = true
+codegen-units = 1
+panic = 'abort'
