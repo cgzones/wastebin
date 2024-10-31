@@ -153,6 +153,12 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         max_expiration,
     };
 
+    if env::password_hash_salt() == env::DEFAULT_PASSWORD_SALT {
+        tracing::info!(
+            "Using default salt for encryption. Consider setting `WASTEBIN_PASSWORD_SALT`."
+        );
+    }
+
     tracing::debug!("caching {cache_size} paste highlights");
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
