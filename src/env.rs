@@ -29,6 +29,8 @@ const VAR_PASSWORD_SALT: &str = "WASTEBIN_PASSWORD_SALT";
 const VAR_HTTP_TIMEOUT: &str = "WASTEBIN_HTTP_TIMEOUT";
 const VAR_MAX_PASTE_EXPIRATION: &str = "WASTEBIN_MAX_PASTE_EXPIRATION";
 
+pub const DEFAULT_PASSWORD_SALT: &str = "somesalt";
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("failed to parse {VAR_CACHE_SIZE}, expected number of elements: {0}")]
@@ -166,7 +168,7 @@ pub fn base_url() -> Result<Option<url::Url>, Error> {
 }
 
 pub fn password_hash_salt() -> String {
-    std::env::var(VAR_PASSWORD_SALT).unwrap_or_else(|_| "somesalt".to_string())
+    std::env::var(VAR_PASSWORD_SALT).unwrap_or_else(|_| DEFAULT_PASSWORD_SALT.to_string())
 }
 
 pub fn http_timeout() -> Result<Duration, Error> {
