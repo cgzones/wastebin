@@ -77,13 +77,16 @@ macro_rules! nonzero {
     };
 }
 
-const EXPIRATION_OPTIONS: [(&str, Expiration); 7] = [
+const EXPIRATION_OPTIONS: [(&str, Expiration); 10] = [
     ("never", Expiration::None),
     ("10 minutes", Expiration::Time(nonzero!(600))),
     ("1 hour", Expiration::Time(nonzero!(3600))),
+    ("3 hours", Expiration::Time(nonzero!(10800))),
     ("1 day", Expiration::Time(nonzero!(86400))),
+    ("3 days", Expiration::Time(nonzero!(259_200))),
     ("1 week", Expiration::Time(nonzero!(604_800))),
     ("1 month", Expiration::Time(nonzero!(2_592_000))),
+    ("3 months", Expiration::Time(nonzero!(7_776_000))),
     ("1 year", Expiration::Time(nonzero!(31_536_000))),
 ];
 
