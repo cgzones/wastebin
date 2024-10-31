@@ -74,15 +74,21 @@ impl std::fmt::Display for Expiration {
 }
 
 #[allow(clippy::unwrap_used)]
-const EXPIRATION_OPTIONS: [(&str, Expiration); 7] = [
+const EXPIRATION_OPTIONS: [(&str, Expiration); 10] = [
     ("never", Expiration::None),
     ("10 minutes", Expiration::Time(NonZero::new(600).unwrap())),
     ("1 hour", Expiration::Time(NonZero::new(3600).unwrap())),
+    ("3 hours", Expiration::Time(NonZero::new(10800).unwrap())),
     ("1 day", Expiration::Time(NonZero::new(86400).unwrap())),
+    ("3 days", Expiration::Time(NonZero::new(259_200).unwrap())),
     ("1 week", Expiration::Time(NonZero::new(604_800).unwrap())),
     (
         "1 month",
         Expiration::Time(NonZero::new(2_592_000).unwrap()),
+    ),
+    (
+        "3 months",
+        Expiration::Time(NonZero::new(7_776_000).unwrap()),
     ),
     (
         "1 year",
