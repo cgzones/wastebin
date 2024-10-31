@@ -45,6 +45,10 @@ pub enum Error {
     ChaCha20Poly1305Decrypt,
     #[error("password not given")]
     NoPassword,
+    #[error("not allowed to create")]
+    RatelimitCreate,
+    #[error("paste content not supported")]
+    UnsupportedCreate,
 }
 
 #[derive(Serialize)]
@@ -76,7 +80,10 @@ impl From<Error> for StatusCode {
             | Error::Argon2(_)
             | Error::ChaCha20Poly1305Encrypt
             | Error::Axum(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Error::Delete | Error::ChaCha20Poly1305Decrypt => StatusCode::FORBIDDEN,
+            Error::Delete | Error::ChaCha20Poly1305Decrypt | Error::RatelimitCreate => {
+                StatusCode::FORBIDDEN
+            }
+            Error::UnsupportedCreate => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         }
     }
 }

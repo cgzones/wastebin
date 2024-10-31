@@ -11,7 +11,7 @@ use crate::{pages, AppState, Error};
 use axum::body::Body;
 use axum::extract::{Form, Json, Path, Query, State};
 use axum::http::header::{self, HeaderMap};
-use axum::http::{Request, StatusCode};
+use axum::http::Request;
 use axum::response::{AppendHeaders, IntoResponse, Redirect, Response};
 use axum::RequestExt;
 use axum_extra::extract::cookie::SignedCookieJar;
@@ -191,7 +191,7 @@ pub async fn insert(
     jar: SignedCookieJar,
     headers: HeaderMap,
     request: Request<Body>,
-) -> Result<Response, Response> {
+) -> Result<Response, pages::ErrorResponse<'static>> {
     if let Some(ref ratelimiter) = state.0.ratelimit_insert {
         static RL_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -200,7 +200,7 @@ pub async fn insert(
                 tracing::info!("Rate limiting paste insertions");
             }
 
-            Err(StatusCode::FORBIDDEN.into_response())?;
+            Err(Error::RatelimitCreate)?;
         }
 
         RL_LOGGED.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -208,7 +208,7 @@ pub async fn insert(
 
     let content_type = headers
         .typed_get::<headers::ContentType>()
-        .ok_or_else(|| StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())?;
+        .ok_or_else(|| Error::UnsupportedCreate)?;
 
     if content_type == headers::ContentType::form_url_encoded() {
         let is_https = headers
@@ -222,23 +222,23 @@ pub async fn insert(
             })
             .unwrap_or(false);
 
-        let entry: Form<form::Entry> = request
-            .extract()
-            .await
-            .map_err(IntoResponse::into_response)?;
+        let entry = match request.extract().await {
+            Ok(c) => c,
+            Err(err) => return Ok(IntoResponse::into_response(err)),
+        };
 
         Ok(form::insert(state, jar, entry, is_https)
             .await
             .into_response())
     } else if content_type == headers::ContentType::json() {
-        let entry: Json<json::Entry> = request
-            .extract()
-            .await
-            .map_err(IntoResponse::into_response)?;
+        let entry: Json<json::Entry> = match request.extract().await {
+            Ok(c) => c,
+            Err(err) => return Ok(IntoResponse::into_response(err)),
+        };
 
         Ok(json::insert(state, entry).await.into_response())
     } else {
-        Err(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())
+        Err(Error::UnsupportedCreate)?
     }
 }
 
