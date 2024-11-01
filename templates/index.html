@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block head %}
-<link rel="preload" as="script" href="index.js" />
+<script defer src="{{ base_path.join("assets/index.js") }}"></script>
 {% endblock %}
 
 {% block nav %}
@@ -48,7 +48,3 @@
       </div>
     </form>
 {%- endblock -%}
-
-{% block endbody %}
-<script src="index.js"></script>
-{% endblock %}

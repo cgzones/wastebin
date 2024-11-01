@@ -5,9 +5,9 @@
     <meta name="generator" content="wastebin {{ meta.version }}">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{{ meta.title }}</title>
-    <link rel="preload" as="style" href="dark.css">
-    <link rel="preload" as="style" href="light.css">
-    <link rel="stylesheet" href="{{ base_path.join(meta.highlight.style.name) }}">
+    <link rel="preload" as="style" href="{{ base_path.join("assets/dark.css") }}">
+    <link rel="preload" as="style" href="{{ base_path.join("assets/light.css") }}">
+    <link rel="stylesheet" href="{{ base_path.join("assets/").join(meta.highlight.style.name) }}">
     <link rel="icon" href="{{ base_path.join("favicon.ico") }}" type="image/x-icon">
     {% block head %}{% endblock %}
   </head>
@@ -26,6 +26,5 @@
         {% block content %}{% endblock %}
       </main>
     </div>
-    {% block endbody %}{% endblock %}
   </body>
 </html>

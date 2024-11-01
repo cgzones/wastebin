@@ -91,5 +91,5 @@ pub async fn insert(
         .build();
 
     let jar = jar.add(cookie);
-    Ok((jar, Redirect::to(&url_with_base)))
+    Ok((jar, Redirect::to(url_with_base.path())))
 }

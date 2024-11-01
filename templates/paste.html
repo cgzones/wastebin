@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% block head %}
-<link rel="preload" as="script" href="paste.js" />
+<script defer src="{{ base_path.join("assets/paste.js") }}"></script>
 {% endblock %}
 
 {% block topbody %}
@@ -17,8 +17,4 @@
     <li><a href="{{ base_path.join(id) }}?dl={{ ext }}"><button>download</button></a></li>
     <li><a href="{{ base_path.join(id) }}?fmt=raw"><button>raw</button></a></li>
     <li><a href="{{ base_path.join(id) }}?fmt=qr"><button>qr</button></a></li>
-{% endblock %}
-
-{% block endbody %}
-<script src="paste.js"></script>
 {% endblock %}
