@@ -65,15 +65,27 @@ impl BasePath {
         &self.0
     }
 
-    pub fn join(&self, s: &str) -> String {
+    pub fn join(&self, s: &str) -> Self {
         let b = &self.0;
-        format!("{b}{s}")
+        Self(format!("{b}{s}"))
     }
 }
 
 impl Default for BasePath {
     fn default() -> Self {
         BasePath("/".to_string())
+    }
+}
+
+impl From<BasePath> for String {
+    fn from(value: BasePath) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for BasePath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 

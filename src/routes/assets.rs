@@ -51,9 +51,12 @@ pub fn routes() -> Router<AppState> {
     let style_name = &DATA.style.name;
     Router::new()
         .route("/favicon.ico", get(|| async { favicon() }))
-        .route(&format!("/{style_name}"), get(|| async { style_css() }))
-        .route("/dark.css", get(|| async { dark_css() }))
-        .route("/light.css", get(|| async { light_css() }))
-        .route("/index.js", get(|| async { index_js() }))
-        .route("/paste.js", get(|| async { paste_js() }))
+        .route(
+            &format!("/assets/{style_name}"),
+            get(|| async { style_css() }),
+        )
+        .route("/assets/dark.css", get(|| async { dark_css() }))
+        .route("/assets/light.css", get(|| async { light_css() }))
+        .route("/assets/index.js", get(|| async { index_js() }))
+        .route("/assets/paste.js", get(|| async { paste_js() }))
 }

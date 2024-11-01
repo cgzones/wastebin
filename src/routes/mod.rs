@@ -39,7 +39,10 @@ mod tests {
     async fn unknown_paste() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(make_app()?).await;
 
-        let res = client.get(&BASE_PATH.join("00000000000")).send().await?;
+        let res = client
+            .get(BASE_PATH.join("00000000000").path())
+            .send()
+            .await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
@@ -295,12 +298,12 @@ mod tests {
         let id = location.replace(BASE_PATH.path(), "");
 
         let res = client
-            .get(&BASE_PATH.join(&format!("delete/{id}")))
+            .get(BASE_PATH.join(&format!("delete/{id}")).path())
             .send()
             .await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
-        let res = client.get(&BASE_PATH.join(&id)).send().await?;
+        let res = client.get(BASE_PATH.join(&id).path()).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())

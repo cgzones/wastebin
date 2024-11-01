@@ -51,7 +51,7 @@ pub async fn insert(
 
     let id = state.db.insert(entry).await?;
     let url = id.to_url_path(extension.as_deref());
-    let path = BASE_PATH.join(&url);
+    let path = BASE_PATH.join(&url).into();
 
     Ok(Json::from(RedirectResponse { path }))
 }
