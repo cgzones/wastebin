@@ -26,9 +26,9 @@ fn light_css() -> impl IntoResponse {
 
 fn favicon() -> impl IntoResponse {
     (
-        TypedHeader(headers::ContentType::png()),
+        TypedHeader(headers::ContentType::from(mime::IMAGE_STAR)),
         TypedHeader(headers::CacheControl::new().with_max_age(env::FAVICON_MAX_AGE)),
-        Bytes::from_static(include_bytes!("../../assets/favicon.png")),
+        Bytes::from_static(include_bytes!("../../assets/favicon.webp")),
     )
 }
 
