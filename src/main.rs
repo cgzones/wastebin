@@ -83,11 +83,11 @@ pub(crate) fn make_app(max_body_size: usize, timeout: Duration) -> Router<AppSta
         .nest(BASE_PATH.path(), routes::routes())
         .layer(
             ServiceBuilder::new()
+                .layer(TraceLayer::new_for_http())
+                .layer(TimeoutLayer::new(timeout))
                 .layer(DefaultBodyLimit::max(max_body_size))
                 .layer(DefaultBodyLimit::disable())
                 .layer(CompressionLayer::new())
-                .layer(TraceLayer::new_for_http())
-                .layer(TimeoutLayer::new(timeout))
                 .layer(from_fn(securityheaders_layer)),
         )
 }
