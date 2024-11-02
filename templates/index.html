@@ -17,6 +17,7 @@
         <div class="controls">
           <div class="extensions-list">
             <select name="extension" id="langs" size="17">
+              <option value="" selected>-- highlight style --</option>
             {%- for syntax in meta.highlight.syntaxes -%}
               {%- if syntax.file_extensions.len() > 0 %}
               <option value="{{ syntax.file_extensions.first().unwrap() }}">{{ syntax.name }}</option>
