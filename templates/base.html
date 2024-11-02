@@ -15,9 +15,13 @@
     {% block topbody %}{% endblock %}
     <div id="main-container">
       <header>
-        <span id="nav-title"><a href="{{ base_path.path() }}" class="navigation">home</a></span>
         <nav>
-          <ul>
+          <ul id="nav_base">
+            <li>
+              <a href="{{ base_path.path() }}" class="navigation">home</a>
+            </li>
+          </ul>
+          <ul id="nav_page">
             {% block nav %}{% endblock %}
           </ul>
         </nav>

@@ -55,20 +55,26 @@ header {
   user-select: none;
 }
 
-main {
-  flex-grow: 1;
-  padding: 1em 2em 1em 2em;
+header .navigation {
+  display: inline-block;
 }
 
-#nav-title {
-  margin-right: auto;
-  margin-top: 16px;
-  margin-bottom: 16px;
+header nav {
+  width: 100%;
 }
 
 header ul {
   margin: 0;
   padding: 0;
+  display: inline-block;
+}
+
+#nav_base {
+  float: left;
+}
+
+#nav_page {
+  float: right;
 }
 
 header li {
@@ -89,6 +95,11 @@ header .navigation:hover {
   background-color: #39bae6;
   color: #0f1419;
   cursor: pointer;
+}
+
+main {
+  flex-grow: 1;
+  padding: 1em 2em 1em 2em;
 }
 
 #form {
