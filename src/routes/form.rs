@@ -39,7 +39,9 @@ impl From<Entry> for write::Entry {
 
         Self {
             text: entry.text,
-            extension: entry.extension,
+            extension: entry
+                .extension
+                .and_then(|e| if e.is_empty() { None } else { Some(e) }),
             expires,
             burn_after_reading,
             uid: None,
