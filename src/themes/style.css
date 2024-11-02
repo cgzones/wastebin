@@ -61,15 +61,26 @@ main {
   user-select: none;
 }
 
-#nav-title {
-  margin-right: auto;
-  margin-top: 16px;
-  margin-bottom: 16px;
+header .navigation {
+  display: inline-block;
+}
+
+header nav {
+  width: 100%;
 }
 
 header ul {
   margin: 0;
   padding: 0;
+  display: inline-block;
+}
+
+#nav_base {
+  float: left;
+}
+
+#nav_page {
+  float: right;
 }
 
 header li {
