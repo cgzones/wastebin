@@ -62,12 +62,12 @@ mod tests {
     fn cache_key() {
         let key = Key::from_str("bJZCna1237p").unwrap();
         assert_eq!(key.id(), "bJZCna1237p");
-        assert_eq!(key.id, 449476178952511423.into());
+        assert_eq!(key.id, 449_476_178_952_511_423.into());
         assert_eq!(key.ext, "txt");
 
         let key = Key::from_str("-IiFec1237p.rs").unwrap();
         assert_eq!(key.id(), "-IiFec1237p");
-        assert_eq!(key.id, (-422741260676702273).into());
+        assert_eq!(key.id, (-422_741_260_676_702_273).into());
         assert_eq!(key.ext, "rs");
 
         assert!(Key::from_str("foo").is_err());

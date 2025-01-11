@@ -54,8 +54,8 @@ mod tests {
             extension: Some("rs".to_string()),
             expires: "0".to_string(),
             burn: None,
-            password: "".to_string(),
-            title: "".to_string(),
+            password: String::new(),
+            title: String::new(),
         };
 
         let res = client.post(BASE_PATH.path()).form(&data).send().await?;
@@ -117,8 +117,8 @@ mod tests {
             extension: None,
             expires: "0".to_string(),
             burn: Some("on".to_string()),
-            password: "".to_string(),
-            title: "".to_string(),
+            password: String::new(),
+            title: String::new(),
         };
 
         let res = client.post(BASE_PATH.path()).form(&data).send().await?;
@@ -159,7 +159,7 @@ mod tests {
             expires: "0".to_string(),
             burn: Some("on".to_string()),
             password: password.to_string(),
-            title: "".to_string(),
+            title: String::new(),
         };
 
         let res = client.post(BASE_PATH.path()).form(&data).send().await?;
@@ -178,6 +178,7 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
 
+        #[expect(clippy::items_after_statements)]
         #[derive(Debug, Serialize)]
         struct Form {
             password: String,
@@ -277,8 +278,8 @@ mod tests {
             extension: None,
             expires: "0".to_string(),
             burn: None,
-            password: "".to_string(),
-            title: "".to_string(),
+            password: String::new(),
+            title: String::new(),
         };
 
         let res = client.post(BASE_PATH.path()).form(&data).send().await?;
@@ -319,8 +320,8 @@ mod tests {
             extension: None,
             expires: "0".to_string(),
             burn: None,
-            password: "".to_string(),
-            title: "".to_string(),
+            password: String::new(),
+            title: String::new(),
         };
 
         let res = client.post(BASE_PATH.path()).form(&data).send().await?;

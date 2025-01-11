@@ -89,8 +89,6 @@ impl From<Inner> for Id {
 
 #[cfg(test)]
 mod tests {
-    use std::i64;
-
     use super::*;
 
     #[test]
@@ -105,9 +103,9 @@ mod tests {
         assert_eq!(id.as_inner(), -1);
         assert_eq!(Id::from_str(&id.to_string()).unwrap(), id);
 
-        let id = Id::from(0xffffffff);
+        let id = Id::from(0xffff_ffff);
         assert_eq!(id.to_string(), "aaaaap++++p");
-        assert_eq!(id.as_inner(), 0xffffffff);
+        assert_eq!(id.as_inner(), 0xffff_ffff);
         assert_eq!(Id::from_str(&id.to_string()).unwrap(), id);
 
         let id = Id::from(i64::MAX);
