@@ -17,6 +17,7 @@ hostname = "0.4.0"
 http = "1.3"
 mime = "0.3"
 qrcodegen = "1"
+ratelimit = "0.10"
 sha2 = "0.10"
 serde = { workspace = true }
 thiserror = { workspace = true }

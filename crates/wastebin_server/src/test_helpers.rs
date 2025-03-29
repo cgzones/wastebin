@@ -8,7 +8,7 @@ use reqwest::RequestBuilder;
 use tokio::net::TcpListener;
 
 use crate::cache::Cache;
-use crate::page;
+use crate::{Ratelimiter, page};
 
 use wastebin_core::db::{self, Database};
 use wastebin_core::expiration::ExpirationSet;
@@ -40,6 +40,14 @@ impl Client {
             key,
             page,
             highlighter: Arc::new(Highlighter::default()),
+            ratelimit_insert: Some(Arc::new(
+                Ratelimiter::builder(60, Duration::from_secs(1))
+                    .max_tokens(60)
+                    .initial_available(60)
+                    .build()
+                    .unwrap(),
+            )),
+            ratelimit_delete: None,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0")

@@ -24,6 +24,10 @@ pub mod vars {
     pub const TITLE: &str = "WASTEBIN_TITLE";
     /// Unix socket path the server binds to.
     pub const SOCKET_PATH: &str = "WASTEBIN_UNIX_SOCKET_PATH";
+    /// Insert rate-limit.
+    pub const RATELIMIT_INSERT: &str = "WASTEBIN_RATELIMIT_INSERT";
+    /// Delete rate-limit.
+    pub const RATELIMIT_DELETE: &str = "WASTEBIN_RATELIMIT_DELETE";
 }
 
 pub(crate) fn password_hash_salt() -> String {
