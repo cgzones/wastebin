@@ -326,9 +326,11 @@ pub mod read {
 
 impl From<rusqlite::Error> for Error {
     fn from(err: rusqlite::Error) -> Self {
-        match err {
-            rusqlite::Error::QueryReturnedNoRows => Error::NotFound,
-            _ => Error::Sqlite(err),
+        if let rusqlite::Error::QueryReturnedNoRows = err {
+            Error::NotFound
+        } else {
+            tracing::warn!("Unhandled rusqlite error type: {err:?}");
+            Error::Sqlite(err)
         }
     }
 }
