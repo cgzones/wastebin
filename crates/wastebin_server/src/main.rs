@@ -220,15 +220,15 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .layer(
             ServiceBuilder::new()
                 .layer(DefaultBodyLimit::max(max_body_size))
-                .layer(
-                    CompressionLayer::new()
-                        .compress_when(DefaultPredicate::new().and(SizeAbove::new(256))),
-                )
                 .layer(TraceLayer::new_for_http())
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     timeout,
                 ))
+                .layer(
+                    CompressionLayer::new()
+                        .compress_when(DefaultPredicate::new().and(SizeAbove::new(256))),
+                )
                 .layer(from_fn(security_headers_layer))
                 .layer(from_fn_with_state(state.clone(), handle_service_errors)),
         )
