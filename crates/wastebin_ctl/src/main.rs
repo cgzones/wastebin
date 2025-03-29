@@ -98,7 +98,7 @@ impl From<ListEntry> for Entry {
     }
 }
 
-#[allow(clippy::print_stdout)]
+#[expect(clippy::print_stdout)]
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -122,7 +122,7 @@ async fn main() -> Result<()> {
             let mut table = Table::new(db.list().await?.into_iter().map(Entry::from));
             table.with(Style::psql()).with(Alignment::left());
 
-            println!("{}", table);
+            println!("{table}");
         }
         Commands::Purge { database } => {
             let (db, db_handler) = Database::new(Open::Path(database))?;
