@@ -6,6 +6,7 @@ use crate::handlers::cookie;
 use crate::handlers::extract::{Preference, SafeReferer};
 
 /// GET handler to switch theme by setting the pref cookie and redirecting back to the referer.
+#[must_use]
 pub async fn get(
     SafeReferer(redirect): SafeReferer,
     jar: CookieJar,

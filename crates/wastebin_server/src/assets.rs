@@ -97,6 +97,7 @@ impl Asset {
     /// which no content coding shrinks are stored unencoded from the start. Small assets such as
     /// `burn.js` would otherwise grow under a content coding. The served route is derived from the
     /// uncompressed `content` and thus shared by all encodings of an asset.
+    #[must_use]
     pub fn new(name: &str, kind: Kind, content: Vec<u8>) -> Self {
         let (mime, ext) = match kind {
             Kind::Css => (mime::TEXT_CSS, "css"),
@@ -130,6 +131,7 @@ impl Asset {
         }
     }
 
+    #[must_use]
     pub fn route(&self) -> &str {
         &self.route
     }
@@ -369,6 +371,7 @@ pub(crate) struct Css {
 
 impl Css {
     /// Create CSS assets for `theme`.
+    #[must_use]
     pub fn new(theme: Theme) -> Self {
         let style = Asset::new("style", Kind::Css, include_str!("style.css").into());
         let light = Asset::new("light", Kind::Css, theme.light_css());

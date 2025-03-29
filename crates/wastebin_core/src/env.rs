@@ -30,6 +30,7 @@ pub mod vars {
     pub const RATELIMIT_DELETE: &str = "WASTEBIN_RATELIMIT_DELETE";
 }
 
+#[must_use]
 pub(crate) fn password_hash_salt() -> String {
     std::env::var(vars::PASSWORD_SALT).unwrap_or_else(|_| {
         tracing::info!(
