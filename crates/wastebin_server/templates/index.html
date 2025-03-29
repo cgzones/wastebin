@@ -94,6 +94,7 @@
           <div class="panel-label">language</div>
           <input type="search" id="filter" class="input-base lang-filter" placeholder="filter …" autocomplete="off">
           <select name="extension" id="langs" class="lang-select" size="12" aria-label="Language">
+            <option value="" selected>-- highlight style --</option>
           {%- for syntax in highlighter.syntaxes() -%}
             {%- if let Some(extension) = syntax.extensions.first() %}
             <option value="{{ extension }}">{{ syntax.name }}</option>
