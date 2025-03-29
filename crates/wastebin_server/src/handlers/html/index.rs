@@ -5,6 +5,7 @@ use axum::extract::State;
 use crate::{Highlighter, Page, handlers::extract::Theme};
 
 /// GET handler for the index page.
+#[must_use]
 pub async fn get(
     State(page): State<Page>,
     State(highlighter): State<Highlighter>,

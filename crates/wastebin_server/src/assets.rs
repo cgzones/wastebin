@@ -43,6 +43,7 @@ impl IntoResponse for Asset {
 
 impl Asset {
     /// Construct new asset under the given `name`, `mime` type and `content`.
+    #[must_use]
     pub fn new(name: &str, mime: mime::Mime, content: Vec<u8>) -> Self {
         Self {
             route: format!("/{name}"),
@@ -52,6 +53,7 @@ impl Asset {
     }
 
     /// Construct new hashed asset under the given `name`, `kind` and `content`.
+    #[must_use]
     pub fn new_hashed(name: &str, kind: Kind, content: Vec<u8>) -> Self {
         let (mime, ext) = match kind {
             Kind::Css => (mime::TEXT_CSS, "css"),
@@ -72,6 +74,7 @@ impl Asset {
         }
     }
 
+    #[must_use]
     pub fn route(&self) -> &str {
         &self.route
     }
@@ -89,6 +92,7 @@ pub(crate) struct Css {
 
 impl Css {
     /// Create CSS assets for `theme`.
+    #[must_use]
     pub fn new(theme: Theme) -> Self {
         let style = Asset::new_hashed("style", Kind::Css, include_str!("style.css").into());
         let light = Asset::new_hashed("light", Kind::Css, theme.light_css());

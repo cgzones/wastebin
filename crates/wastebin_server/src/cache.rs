@@ -24,6 +24,7 @@ pub(crate) struct Cache {
 }
 
 impl Cache {
+    #[must_use]
     pub fn new(size: NonZeroUsize) -> Self {
         let inner = Arc::new(Mutex::new(SizedCache::with_size(size.into())));
 
@@ -37,6 +38,7 @@ impl Cache {
             .cache_set(key, value);
     }
 
+    #[must_use]
     pub fn get(&self, key: &Key) -> Option<Html> {
         self.inner
             .lock()
@@ -48,6 +50,7 @@ impl Cache {
 
 impl Key {
     /// Make a copy of the owned id.
+    #[must_use]
     pub fn id(&self) -> String {
         self.id.to_string()
     }
