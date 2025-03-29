@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::cache::Key;
 use crate::handlers::extract::{Theme, Uid};
 use crate::handlers::html::{ErrorResponse, PasswordInput, make_error};
-use crate::{Cache, Database, Highlighter, Page};
+use crate::{AppState, Page};
 use wastebin_core::crypto::Password;
 use wastebin_core::db;
 use wastebin_core::db::read::{Data, Entry, Metadata};
@@ -34,17 +34,18 @@ pub(crate) struct Paste {
     title: Option<String>,
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn get<E>(
-    State(cache): State<Cache>,
-    State(page): State<Page>,
-    State(db): State<Database>,
-    State(highlighter): State<Highlighter>,
+    State(appstate): State<AppState>,
     Path(id): Path<String>,
     uid: Option<Uid>,
     theme: Option<Theme>,
     form: Result<Form<PasswordForm>, E>,
 ) -> Result<Response, ErrorResponse> {
+    let cache = &appstate.cache;
+    let page = &appstate.page;
+    let db = &appstate.db;
+    let highlighter = &appstate.highlighter;
+
     async {
         let password = form
             .ok()
@@ -108,7 +109,7 @@ pub async fn get<E>(
         Ok(paste.into_response())
     }
     .await
-    .map_err(|err| make_error(err, page, theme))
+    .map_err(|err| make_error(err, page.clone(), theme))
 }
 
 #[cfg(test)]
