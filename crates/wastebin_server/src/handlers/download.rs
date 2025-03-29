@@ -44,6 +44,7 @@ pub async fn get(
     .map_err(|err| make_error(err, page, theme, lang))
 }
 
+#[must_use]
 fn make_content_disposition(filename: &str) -> HeaderValue {
     let mut value = String::from("attachment; filename*=UTF-8''");
 
@@ -58,6 +59,7 @@ fn make_content_disposition(filename: &str) -> HeaderValue {
     HeaderValue::try_from(value).unwrap_or_else(|_| HeaderValue::from_static("attachment"))
 }
 
+#[must_use]
 fn get_download(key: &Key, data: Data) -> impl IntoResponse {
     let filename = data.metadata.title.unwrap_or_else(|| key.to_string());
 

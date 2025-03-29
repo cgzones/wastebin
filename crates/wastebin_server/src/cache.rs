@@ -66,6 +66,7 @@ impl Cache {
             .cache_set(Slot::new(key, mode), value);
     }
 
+    #[must_use]
     pub fn get(&self, key: &Key, mode: Mode) -> Option<Html> {
         self.inner
             .lock()
@@ -77,6 +78,7 @@ impl Cache {
 
 impl Key {
     /// Make a copy of the owned id.
+    #[must_use]
     pub fn id(&self) -> String {
         self.id.to_string()
     }

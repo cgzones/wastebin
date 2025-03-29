@@ -48,6 +48,7 @@ pub(crate) type ErrorResponse = (StatusCode, Error);
 
 /// Create an error response from `error` consisting of [`StatusCode`] derive from `error` as well
 /// as a rendered page with a description.
+#[must_use]
 pub fn make_error(
     error: crate::Error,
     page: Page,
