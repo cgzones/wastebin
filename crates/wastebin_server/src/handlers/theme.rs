@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Redirect};
 use http::header::{REFERER, SET_COOKIE};
 
 /// GET handler to switch theme by setting the pref cookie and redirecting back to the referer.
+#[must_use]
 pub async fn get(headers: HeaderMap, Query(pref): Query<Preference>) -> impl IntoResponse {
     let response = headers
         .get(REFERER)
