@@ -88,7 +88,7 @@ impl From<ListEntry> for Entry {
     }
 }
 
-#[allow(clippy::print_stdout)]
+#[expect(clippy::print_stdout)]
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let db = Database::new(Open::Path(cli.database))?;
@@ -98,7 +98,7 @@ fn main() -> Result<()> {
             let mut table = Table::new(db.list()?.into_iter().map(Entry::from));
             table.with(Style::psql()).with(Alignment::left());
 
-            println!("{}", table);
+            println!("{table}");
         }
         Commands::Purge => {
             let ids = db.purge()?;
