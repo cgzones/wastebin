@@ -27,5 +27,12 @@ pub mod vars {
 }
 
 pub(crate) fn password_hash_salt() -> String {
-    std::env::var(vars::PASSWORD_SALT).unwrap_or_else(|_| "somesalt".to_string())
+    std::env::var(vars::PASSWORD_SALT).unwrap_or_else(|_| {
+        tracing::info!(
+            "Using default salt for encryption. Consider setting `{}`.",
+            vars::PASSWORD_SALT
+        );
+
+        "somesalt".to_string()
+    })
 }
