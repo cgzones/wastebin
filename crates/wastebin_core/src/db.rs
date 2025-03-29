@@ -693,8 +693,7 @@ mod tests {
         #[must_use]
         pub fn unwrap_inner(self) -> read::Data {
             match self {
-                read::Entry::Regular(data) => data,
-                read::Entry::Burned(data) => data,
+                read::Entry::Regular(data) | read::Entry::Burned(data) => data,
             }
         }
     }
