@@ -80,6 +80,7 @@ impl Plaintext {
 
 impl Encrypted {
     /// Create new [`Encrypted`] item from `ciphertext` and `nonce`.
+    #[must_use]
     pub fn new(ciphertext: Vec<u8>, nonce: Vec<u8>) -> Self {
         Self { ciphertext, nonce }
     }

@@ -38,6 +38,7 @@ pub async fn get(
     .map_err(|err| make_error(err, page, theme))
 }
 
+#[must_use]
 fn get_download(key: &Key, data: Data) -> impl IntoResponse {
     let filename = data.metadata.title.unwrap_or_else(|| format!("{key}"));
 
