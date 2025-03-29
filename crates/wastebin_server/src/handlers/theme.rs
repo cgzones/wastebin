@@ -6,6 +6,7 @@ use http::header::{REFERER, SET_COOKIE};
 use crate::handlers::extract::Preference;
 
 /// GET handler to switch theme by setting the pref cookie and redirecting back to the referer.
+#[must_use]
 pub async fn get(headers: HeaderMap, Query(pref): Query<Preference>) -> impl IntoResponse {
     let response = headers
         .get(REFERER)
