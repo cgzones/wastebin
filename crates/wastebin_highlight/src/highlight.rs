@@ -92,6 +92,7 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
 }
 
 /// Return `true` if `scope` will be used to render a Markdown link.
+#[must_use]
 fn is_markdown_link(scope: Scope) -> bool {
     #[expect(deprecated)]
     let repo = SCOPE_REPO.lock().expect("lock");
@@ -278,10 +279,12 @@ impl Highlighter {
 impl Html {
     /// Wrap an already-HTML string. Callers are responsible for ensuring the content is safe to
     /// insert into a page (i.e. produced by a trusted renderer).
+    #[must_use]
     pub fn new(html: String) -> Self {
         Self(html)
     }
 
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }
