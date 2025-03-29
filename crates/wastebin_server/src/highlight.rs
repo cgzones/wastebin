@@ -95,6 +95,7 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
 }
 
 /// Return `true` if `scope` will be used to render a Markdown link.
+#[must_use]
 fn is_markdown_link(scope: Scope) -> bool {
     let repo = SCOPE_REPO.lock().expect("lock");
 
@@ -241,6 +242,7 @@ impl Highlighter {
 }
 
 impl Html {
+    #[must_use]
     pub fn into_inner(self) -> String {
         self.0
     }

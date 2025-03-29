@@ -46,6 +46,7 @@ impl IntoResponse for Asset {
 
 impl Asset {
     /// Construct new asset under the given `name`, `mime` type and `content`.
+    #[must_use]
     pub fn new(name: &str, mime: mime::Mime, content: Vec<u8>) -> Self {
         Self {
             route: format!("/{name}"),
@@ -55,6 +56,7 @@ impl Asset {
     }
 
     /// Construct new hashed asset under the given `name`, `kind` and `content`.
+    #[must_use]
     pub fn new_hashed(name: &str, kind: Kind, content: Vec<u8>) -> Self {
         let (mime, ext) = match kind {
             Kind::Css => (mime::TEXT_CSS, "css"),
@@ -75,6 +77,7 @@ impl Asset {
         }
     }
 
+    #[must_use]
     pub fn route(&self) -> &str {
         &self.route
     }
@@ -92,6 +95,7 @@ pub(crate) struct Css {
 
 /// Generate the highlighting colors for `theme` and add main foreground and background colors
 /// based on the theme.
+#[must_use]
 fn combined_css(theme: &highlighting::Theme) -> Vec<u8> {
     let fg = theme.settings.foreground.expect("existing color");
     let bg = theme.settings.background.expect("existing color");
@@ -113,6 +117,7 @@ fn combined_css(theme: &highlighting::Theme) -> Vec<u8> {
 
 impl Css {
     /// Create CSS assets for `theme`.
+    #[must_use]
     pub fn new(theme: Theme) -> Self {
         let light_theme = light_theme(theme);
         let dark_theme = dark_theme(theme);
@@ -124,6 +129,7 @@ impl Css {
     }
 }
 
+#[must_use]
 fn light_theme(theme: Theme) -> syntect::highlighting::Theme {
     let theme_set = two_face::theme::extra();
 
@@ -143,6 +149,7 @@ fn light_theme(theme: Theme) -> syntect::highlighting::Theme {
     }
 }
 
+#[must_use]
 fn dark_theme(theme: Theme) -> syntect::highlighting::Theme {
     let theme_set = two_face::theme::extra();
 
