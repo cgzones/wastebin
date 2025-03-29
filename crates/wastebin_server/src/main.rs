@@ -249,7 +249,6 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let cache = Cache::new(cache_size);
     let db = Database::new(method)?;
 
-    tracing::debug!("serving on {addr}");
     tracing::debug!("caching {cache_size} paste highlights");
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
@@ -263,6 +262,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         page,
         highlighter,
     };
+
+    tracing::info!("serving on {addr}");
 
     let listener = TcpListener::bind(&addr).await?;
     serve(listener, state, timeout, max_body_size).await?;
