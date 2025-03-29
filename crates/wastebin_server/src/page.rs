@@ -40,6 +40,7 @@ impl Page {
 
 impl Assets {
     /// Create page [`Assets`] for the given `theme`.
+    #[must_use]
     fn new(theme: Theme) -> Self {
         Self {
             favicon: Asset::new(
