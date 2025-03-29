@@ -9,7 +9,10 @@ use crate::Error::RateLimit;
 pub mod api;
 pub mod form;
 
-async fn common_insert(appstate: &AppState, id: Id, entry: write::Entry) -> Result<(), Error> {
+async fn common_insert(
+    appstate: &AppState,
+    entry: write::Entry,
+) -> Result<(Id, write::Entry), Error> {
     if let Some(ref ratelimiter) = appstate.ratelimit_insert {
         static RL_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -24,7 +27,7 @@ async fn common_insert(appstate: &AppState, id: Id, entry: write::Entry) -> Resu
         RL_LOGGED.store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
-    appstate.db.insert(id, entry).await?;
+    let res = appstate.db.insert(entry).await?;
 
-    Ok(())
+    Ok(res)
 }

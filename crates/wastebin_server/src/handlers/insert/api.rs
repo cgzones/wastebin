@@ -5,7 +5,6 @@ use axum::extract::State;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
 use wastebin_core::db::write;
-use wastebin_core::id::Id;
 
 use super::common_insert;
 
@@ -42,10 +41,9 @@ pub async fn post(
     State(appstate): State<AppState>,
     Json(entry): Json<Entry>,
 ) -> Result<Json<RedirectResponse>, JsonErrorResponse> {
-    let id = Id::rand();
     let entry: write::Entry = entry.into();
+    let (id, entry) = common_insert(&appstate, entry).await?;
     let path = format!("/{}", id.to_url_path(&entry));
-    common_insert(&appstate, id, entry).await?;
 
     Ok(Json::from(RedirectResponse { path }))
 }
