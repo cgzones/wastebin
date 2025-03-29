@@ -174,6 +174,8 @@ run-time behavior:
 | `WASTEBIN_THEME`                  | Theme colors, one of `ayu`, `base16ocean`, `coldark`, `gruvbox`, `monokai`, `onehalf`, `solarized`. | `ayu` |
 | `WASTEBIN_TITLE`                  | HTML page title.                                              | `wastebin`            |
 | `WASTEBIN_UNIX_SOCKET_PATH`       | Path to a Unix socket to accept connections from.             |                       |
+| `WASTEBIN_RATELIMIT_INSERT`       | Maximum allowed creation amount of new pastes per minute.     | `0` (disabled)        |
+| `WASTEBIN_RATELIMIT_DELETE`       | Maximum allowed delete attempts of existing pastes per minute. | `0` (disabled)       |
 | `RUST_LOG`                        | Log level. Besides the typical `trace`, `debug`, `info` etc. keys, you can also set the `tower_http` key to a log level to get additional request and response logs. |  |
 
 > [!NOTE]
