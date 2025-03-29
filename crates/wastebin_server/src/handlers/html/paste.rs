@@ -13,7 +13,7 @@ use crate::handlers::html::{
 };
 use crate::handlers::{NoStore, uid_cookie};
 use crate::i18n::Lang;
-use crate::{Cache, Database, Highlighter, Page};
+use crate::{AppState, Page};
 use wastebin_core::crypto::Password;
 use wastebin_core::db;
 use wastebin_core::db::read::{Data, Entry, Metadata};
@@ -62,10 +62,7 @@ pub(crate) fn is_markdown_ext(ext: Option<&str>) -> bool {
 
 #[expect(clippy::too_many_arguments)]
 pub async fn get<E>(
-    State(cache): State<Cache>,
-    State(page): State<Page>,
-    State(db): State<Database>,
-    State(highlighter): State<Highlighter>,
+    State(appstate): State<AppState>,
     State(cookie_key): State<CookieKey>,
     Path(id): Path<String>,
     Query(handoff): Query<OwnerHandoff>,
@@ -75,6 +72,11 @@ pub async fn get<E>(
     lang: Lang,
     form: Result<Form<PasteForm>, E>,
 ) -> Result<Response, ErrorResponse> {
+    let cache = &appstate.cache;
+    let page = &appstate.page;
+    let db = &appstate.db;
+    let highlighter = &appstate.highlighter;
+
     if let Some(token) = handoff.owner.as_deref()
         && let Some(claimed_uid) = verify_owner_token(&cookie_key, token)
     {
@@ -184,7 +186,7 @@ pub async fn get<E>(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, appstate.page, theme, lang))
 }
 
 #[cfg(test)]
