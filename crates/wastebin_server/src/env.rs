@@ -1,7 +1,7 @@
 use std::env::VarError;
 use std::fmt::Display;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::num::{NonZero, NonZeroU32, NonZeroUsize, ParseIntError};
+use std::num::{NonZero, NonZeroU32, NonZeroUsize, ParseIntError, TryFromIntError};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -9,9 +9,9 @@ use axum_extra::extract::cookie::Key;
 
 use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
+    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
-use wastebin_core::{db, expiration};
+use wastebin_core::{db, expiration, expiration::Expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -38,6 +38,14 @@ pub(crate) enum Error {
     ParsePasteExpiration(#[from] expiration::Error),
     #[error("failed to parse theme name")]
     ParseTheme(#[from] ParseThemeNameError),
+    #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
+    ParsePasteMaxExpiration(expiration::Error),
+    #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
+    PasteMaxExpirationOverflow(TryFromIntError),
+    #[error(
+        "{PASTE_EXPIRATIONS} entry `{0}` is incompatible with {PASTE_MAX_EXPIRATION}: entries must be non-zero and at most the maximum"
+    )]
+    ExpirationExceedsMax(expiration::Expiration),
     #[error("binding to both TCP and Unix socket is not possible")]
     BothListeners,
     #[error("failed to parse {RATELIMIT_INSERT}: {0}")]
@@ -165,6 +173,47 @@ pub fn expiration_set() -> Result<expiration::ExpirationSet, Error> {
     Ok(set)
 }
 
+pub fn max_expiration() -> Result<Option<NonZeroU32>, Error> {
+    std::env::var(vars::PASTE_MAX_EXPIRATION)
+        .ok()
+        .map(|value| {
+            value
+                .parse::<Expiration>()
+                .map_err(Error::ParsePasteMaxExpiration)
+                .and_then(|exp| {
+                    u32::try_from(exp.duration.as_secs()).map_err(Error::PasteMaxExpirationOverflow)
+                })
+        })
+        .transpose()
+        .map(|op| op.and_then(NonZero::new))
+}
+
+/// Ensure the configured expirations are all reachable once a maximum is enforced.
+///
+/// A zero-duration ("never") entry, or one exceeding `max_expiration`, would be offered by the
+/// form yet unconditionally rejected by `insert::common_insert`, so it is treated as a startup
+/// misconfiguration rather than silently dropped.
+pub(crate) fn validate_expirations(
+    expirations: &expiration::ExpirationSet,
+    max_expiration: Option<NonZeroU32>,
+) -> Result<(), Error> {
+    let Some(max_expiration) = max_expiration else {
+        return Ok(());
+    };
+
+    let max_secs = u64::from(max_expiration.get());
+
+    for expiration in expirations.values() {
+        let secs = expiration.duration.as_secs();
+
+        if secs == 0 || secs > max_secs {
+            return Err(Error::ExpirationExceedsMax(expiration.clone()));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
     std::env::var(vars::RATELIMIT_INSERT)
         .ok()
@@ -179,4 +228,46 @@ pub fn ratelimit_delete() -> Result<Option<NonZeroU32>, Error> {
         .map(|value| value.parse::<u32>().map_err(Error::RatelimitDelete))
         .transpose()
         .map(|op| op.and_then(NonZero::new))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_expirations_rejects_never_with_max() {
+        let expirations = "0=d,1h".parse::<expiration::ExpirationSet>().unwrap();
+        let max = NonZeroU32::new(3600).unwrap();
+
+        assert!(matches!(
+            validate_expirations(&expirations, Some(max)),
+            Err(Error::ExpirationExceedsMax(_))
+        ));
+    }
+
+    #[test]
+    fn validate_expirations_rejects_entry_above_max() {
+        let expirations = "1h,1d".parse::<expiration::ExpirationSet>().unwrap();
+        let max = NonZeroU32::new(3600).unwrap();
+
+        assert!(matches!(
+            validate_expirations(&expirations, Some(max)),
+            Err(Error::ExpirationExceedsMax(_))
+        ));
+    }
+
+    #[test]
+    fn validate_expirations_accepts_set_within_max() {
+        let expirations = "10m,1h=d".parse::<expiration::ExpirationSet>().unwrap();
+        let max = NonZeroU32::new(3600).unwrap();
+
+        assert!(validate_expirations(&expirations, Some(max)).is_ok());
+    }
+
+    #[test]
+    fn validate_expirations_accepts_anything_without_max() {
+        let expirations = "0=d,1h,1y".parse::<expiration::ExpirationSet>().unwrap();
+
+        assert!(validate_expirations(&expirations, None).is_ok());
+    }
 }

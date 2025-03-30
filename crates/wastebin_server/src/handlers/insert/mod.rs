@@ -4,7 +4,7 @@ use wastebin_core::{db::write, id::Id};
 
 use crate::AppState;
 use crate::Error;
-use crate::Error::RateLimit;
+use crate::Error::{RateLimit, TooLongExpires};
 use crate::handlers::{RATELIMIT_LOG_INTERVAL, START};
 
 pub mod api;
@@ -14,6 +14,12 @@ async fn common_insert(
     appstate: &AppState,
     entry: write::Entry,
 ) -> Result<(Id, write::Entry), Error> {
+    if let Some(max_expiration) = appstate.page.max_expiration
+        && entry.expires.is_none_or(|exp| exp > max_expiration)
+    {
+        Err(TooLongExpires)?;
+    }
+
     if let Some(ref ratelimiter) = appstate.ratelimit_insert {
         /// Next second since `START` at which logging is allowed again.
         static RL_LOGGED: AtomicU64 = AtomicU64::new(0);

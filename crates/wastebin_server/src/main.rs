@@ -261,6 +261,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let title = env::title();
     let ratelimit_insert = env::ratelimit_insert()?;
     let ratelimit_delete = env::ratelimit_delete()?;
+    let max_expiration = env::max_expiration()?;
+    env::validate_expirations(&expirations, max_expiration)?;
 
     let cache = Cache::new(cache_size)?;
     let (db, db_handler) = Database::new(method)?;
@@ -269,6 +271,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("caching {cache_size} paste highlights");
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
+    tracing::debug!("enforcing a maximum expiry of {max_expiration:?}");
     tracing::debug!("ratelimiting insert amount to {ratelimit_insert:?} per second");
     tracing::debug!("ratelimiting delete attempts to {ratelimit_delete:?} per second");
 
@@ -278,6 +281,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         theme,
         expirations,
         max_body_size,
+        max_expiration,
     ));
     let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
     let ratelimit_insert = ratelimit_insert.map(|rli| {

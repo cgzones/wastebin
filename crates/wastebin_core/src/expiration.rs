@@ -196,6 +196,12 @@ impl ExpirationSet {
     pub fn into_inner(self) -> Vec<Expiration> {
         self.0
     }
+
+    /// Borrow the sorted values without consuming the set.
+    #[must_use]
+    pub fn values(&self) -> &[Expiration] {
+        &self.0
+    }
 }
 
 #[cfg(test)]

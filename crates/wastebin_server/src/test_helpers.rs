@@ -43,6 +43,7 @@ impl Client {
             Theme::Ayu,
             expirations,
             1024 * 1024,
+            None,
         ));
         let state = crate::AppState {
             db,
