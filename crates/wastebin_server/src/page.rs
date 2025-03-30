@@ -1,3 +1,5 @@
+use std::num::NonZeroU32;
+
 use url::Url;
 
 use crate::assets::{Asset, Css, Kind};
@@ -21,6 +23,7 @@ pub(crate) struct Page {
     pub base_url: Url,
     pub expirations: Vec<Expiration>,
     pub max_body_size: usize,
+    pub max_expiration: Option<NonZeroU32>,
 }
 
 impl Page {
@@ -32,6 +35,7 @@ impl Page {
         theme: Theme,
         expirations: ExpirationSet,
         max_body_size: usize,
+        max_expiration: Option<NonZeroU32>,
     ) -> Self {
         let assets = Assets::new(theme);
         let expirations = expirations.into_inner();
@@ -43,6 +47,7 @@ impl Page {
             base_url,
             expirations,
             max_body_size,
+            max_expiration,
         }
     }
 }
