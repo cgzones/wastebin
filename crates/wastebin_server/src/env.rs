@@ -8,7 +8,7 @@ use std::time::Duration;
 use wastebin_core::db;
 use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
+    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -31,6 +31,8 @@ pub(crate) enum Error {
     HttpTimeout(ParseIntError),
     #[error("failed to parse {PASTE_EXPIRATIONS}: {0}")]
     ParsePasteExpiration(#[from] expiration::Error),
+    #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
+    ParsePasteMaxExpiration(ParseIntError),
     #[error("unknown theme {0}")]
     UnknownTheme(String),
     #[error("failed to parse {RATELIMIT_INSERT}: {0}")]
@@ -141,6 +143,14 @@ pub fn expiration_set() -> Result<expiration::ExpirationSet, Error> {
     )?;
 
     Ok(set)
+}
+
+pub fn max_expiration() -> Result<Option<NonZeroU32>, Error> {
+    std::env::var(vars::PASTE_MAX_EXPIRATION)
+        .ok()
+        .map(|value| value.parse::<u32>().map_err(Error::ParsePasteMaxExpiration))
+        .transpose()
+        .map(|op| op.and_then(NonZero::new))
 }
 
 pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
