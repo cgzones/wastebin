@@ -28,6 +28,8 @@ pub(crate) enum Error {
     MalformedForm,
     #[error("rate-limit hit")]
     RateLimit,
+    #[error("expires too far in the future")]
+    TooLongExpires,
 }
 
 #[derive(Serialize)]
@@ -46,9 +48,10 @@ impl From<Error> for StatusCode {
                 db::Error::Delete | db::Error::Crypto(crypto::Error::ChaCha20Poly1305Decrypt),
             )
             | Error::RateLimit => StatusCode::FORBIDDEN,
-            Error::Database(db::Error::NoPassword) | Error::Id(_) | Error::UrlParsing(_) => {
-                StatusCode::BAD_REQUEST
-            }
+            Error::Database(db::Error::NoPassword)
+            | Error::Id(_)
+            | Error::UrlParsing(_)
+            | Error::TooLongExpires => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::Join(_)
             | Error::QrCode(_)
