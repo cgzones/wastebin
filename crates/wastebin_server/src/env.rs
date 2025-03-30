@@ -9,7 +9,7 @@ use axum_extra::extract::cookie::Key;
 
 use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
+    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
 use wastebin_core::{db, expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
@@ -36,6 +36,10 @@ pub(crate) enum Error {
     ParsePasteExpiration(#[from] expiration::Error),
     #[error("failed to parse theme name")]
     ParseTheme(#[from] ParseThemeNameError),
+    #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
+    ParsePasteMaxExpiration(expiration::Error),
+    #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
+    PasteMaxExpirationOverflow(TryFromIntError),
     #[error("binding to both TCP and Unix socket is not possible")]
     BothListeners,
     #[error("failed to parse {RATELIMIT_INSERT}: {0}")]
@@ -161,6 +165,14 @@ pub fn expiration_set() -> Result<expiration::ExpirationSet, Error> {
     )?;
 
     Ok(set)
+}
+
+pub fn max_expiration() -> Result<Option<NonZeroU32>, Error> {
+    std::env::var(vars::PASTE_MAX_EXPIRATION)
+        .ok()
+        .map(|value| value.parse::<u32>().map_err(Error::ParsePasteMaxExpiration))
+        .transpose()
+        .map(|op| op.and_then(NonZero::new))
 }
 
 pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
