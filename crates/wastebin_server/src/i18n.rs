@@ -136,9 +136,9 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "duration.days" => "{0} days",
     "duration.hour" => "{0} hour",
     "duration.hours" => "{0} hours",
-    "duration.minute" => "{0} minute",
+    "duration.minute" => "{0} min",
     "duration.minutes" => "{0} mins",
-    "duration.second" => "{0} second",
+    "duration.second" => "{0} sec",
     "duration.seconds" => "{0} secs",
 
     "burn.title" => "Burn after reading",

@@ -21,7 +21,7 @@ pub enum Error {
 }
 
 /// Single expiration value that can be the default in a set of values.
-#[derive(Clone, Debug, Ord, Eq, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Expiration {
     pub duration: Duration,
     pub default: bool,
@@ -107,10 +107,7 @@ impl FromStr for Expiration {
                 _ => Err(Error::IllegalMagnitude)?,
             };
 
-            match val.checked_mul(mag) {
-                Some(val) => val,
-                None => Err(Error::Overflow)?,
-            }
+            val.checked_mul(mag).ok_or(Error::Overflow)?
         } else {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
@@ -138,32 +135,30 @@ impl FromStr for Expiration {
 /// outside of the web UI.
 impl Display for Expiration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        const SEPARATOR: &str = ", ";
+
         if self.duration.is_zero() {
             return f.write_str("never");
         }
 
-        let parts: Vec<String> = self
-            .components()
-            .into_iter()
-            .map(|(value, unit)| match (unit, value) {
-                (Unit::Year, 1) => String::from("1 year"),
-                (Unit::Year, n) => format!("{n} years"),
-                (Unit::Month, 1) => String::from("1 month"),
-                (Unit::Month, n) => format!("{n} months"),
-                (Unit::Week, 1) => String::from("1 week"),
-                (Unit::Week, n) => format!("{n} weeks"),
-                (Unit::Day, 1) => String::from("1 day"),
-                (Unit::Day, n) => format!("{n} days"),
-                (Unit::Hour, 1) => String::from("1 hour"),
-                (Unit::Hour, n) => format!("{n} hours"),
-                (Unit::Minute, 1) => String::from("1 minute"),
-                (Unit::Minute, n) => format!("{n} mins"),
-                (Unit::Second, 1) => String::from("1 second"),
-                (Unit::Second, n) => format!("{n} secs"),
-            })
-            .collect();
+        let mut sep = "";
 
-        f.write_str(&parts.join(", "))
+        for (value, unit) in self.components() {
+            let (singular, plural) = match unit {
+                Unit::Year => ("year", "years"),
+                Unit::Month => ("month", "months"),
+                Unit::Week => ("week", "weeks"),
+                Unit::Day => ("day", "days"),
+                Unit::Hour => ("hour", "hours"),
+                Unit::Minute => ("min", "mins"),
+                Unit::Second => ("sec", "secs"),
+            };
+            let name = if value > 1 { plural } else { singular };
+            write!(f, "{sep}{value} {name}")?;
+            sep = SEPARATOR;
+        }
+
+        Ok(())
     }
 }
 
@@ -350,6 +345,13 @@ mod tests {
         assert!(expirations[0].default);
         assert!(!expirations[1].default);
         assert!(!expirations[2].default);
+
+        let expirations2 = "1h,1m=d,800m"
+            .parse::<ExpirationSet>()
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(expirations, expirations2);
     }
 
     #[test]
@@ -375,7 +377,7 @@ mod tests {
     #[test]
     fn formatting() {
         assert_eq!(format!("{}", Expiration::from_secs(30)), "30 secs");
-        assert_eq!(format!("{}", Expiration::from_secs(60)), "1 minute");
+        assert_eq!(format!("{}", Expiration::from_secs(60)), "1 min");
         assert_eq!(format!("{}", Expiration::from_secs(60 * 2)), "2 mins");
         assert_eq!(format!("{}", Expiration::from_secs(60 * 60)), "1 hour");
         assert_eq!(format!("{}", Expiration::from_secs(60 * 60 * 2)), "2 hours");
@@ -431,6 +433,8 @@ mod tests {
             ),
             "1 month, 4 weeks, 23 hours, 42 secs"
         );
+
+        assert_eq!(format!("{}", "1".parse::<Expiration>().unwrap()), "1 sec");
 
         assert_eq!(
             format!("{}", "30s".parse::<Expiration>().unwrap()),
