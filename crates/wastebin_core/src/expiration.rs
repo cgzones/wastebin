@@ -21,7 +21,7 @@ pub enum Error {
 }
 
 /// Single expiration value that can be the default in a set of values.
-#[derive(Clone, Debug, Ord, Eq, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Expiration {
     pub duration: Duration,
     pub default: bool,
@@ -63,10 +63,7 @@ impl FromStr for Expiration {
                 _ => Err(Error::IllegalMagnitude)?,
             };
 
-            match val.checked_mul(mag) {
-                Some(val) => val,
-                None => Err(Error::Overflow)?,
-            }
+            val.checked_mul(mag).ok_or(Error::Overflow)?
         } else {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
@@ -97,73 +94,81 @@ impl Display for Expiration {
             (r > 0).then_some((r, dividend % divisor))
         }
 
+        const SEPARATOR: &str = ", ";
+        let mut sep = "";
         let mut secs = self.duration.as_secs();
 
         if secs == 0 {
             return write!(f, "never");
         }
 
-        let mut parts = Vec::new();
-
         if let Some((years, rem)) = div(secs, YEAR_SECS) {
             if years > 1 {
-                parts.push(format!("{years} years"));
+                write!(f, "{years} years")?;
             } else {
-                parts.push(String::from("1 year"));
+                write!(f, "1 year")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
         if let Some((months, rem)) = div(secs, MONTH_SECS) {
             if months > 1 {
-                parts.push(format!("{months} months"));
+                write!(f, "{sep}{months} months")?;
             } else {
-                parts.push(String::from("1 month"));
+                write!(f, "{sep}1 month")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
         if let Some((weeks, rem)) = div(secs, 60 * 60 * 24 * 7) {
             if weeks > 1 {
-                parts.push(format!("{weeks} weeks"));
+                write!(f, "{sep}{weeks} weeks")?;
             } else {
-                parts.push(String::from("1 week"));
+                write!(f, "{sep}1 week")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
         if let Some((days, rem)) = div(secs, 60 * 60 * 24) {
             if days > 1 {
-                parts.push(format!("{days} days"));
+                write!(f, "{sep}{days} days")?;
             } else {
-                parts.push(String::from("1 day"));
+                write!(f, "{sep}1 day")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
         if let Some((hours, rem)) = div(secs, 60 * 60) {
             if hours > 1 {
-                parts.push(format!("{hours} hours"));
+                write!(f, "{sep}{hours} hours")?;
             } else {
-                parts.push(String::from("1 hour"));
+                write!(f, "{sep}1 hour")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
         if let Some((minutes, rem)) = div(secs, 60) {
             if minutes > 1 {
-                parts.push(format!("{minutes} minutes"));
+                write!(f, "{sep}{minutes} minutes")?;
             } else {
-                parts.push(String::from("1 minute"));
+                write!(f, "{sep}1 minute")?;
             }
             secs = rem;
+            sep = SEPARATOR;
         }
 
-        if secs > 0 {
-            parts.push(format!("{secs} seconds"));
+        if secs > 1 {
+            write!(f, "{sep}{secs} seconds")?;
+        } else if secs == 1 {
+            write!(f, "{sep}1 second")?;
         }
 
-        f.write_str(&parts.join(", "))
+        Ok(())
     }
 }
 
@@ -344,6 +349,13 @@ mod tests {
         assert!(expirations[0].default);
         assert!(!expirations[1].default);
         assert!(!expirations[2].default);
+
+        let expirations2 = "1h,1m=d,800m"
+            .parse::<ExpirationSet>()
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(expirations, expirations2);
     }
 
     #[test]
@@ -424,6 +436,11 @@ mod tests {
                 Expiration::from_secs(60 * 60 * 24 * 7 * 8 + 60 * 60 * 24 * 2 + 23 * 60 * 60 + 42)
             ),
             "1 month, 4 weeks, 23 hours, 42 seconds"
+        );
+
+        assert_eq!(
+            format!("{}", "1".parse::<Expiration>().unwrap()),
+            "1 second"
         );
 
         assert_eq!(
