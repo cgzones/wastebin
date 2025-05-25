@@ -1,7 +1,7 @@
 use std::env::VarError;
 use std::fmt::Display;
 use std::net::{Ipv4Addr, SocketAddr};
-use std::num::{NonZero, NonZeroU32, NonZeroUsize, ParseIntError};
+use std::num::{NonZero, NonZeroU32, NonZeroUsize, ParseIntError, TryFromIntError};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
     PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
-use wastebin_core::{db, expiration};
+use wastebin_core::{db, expiration, expiration::Expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
@@ -170,7 +170,14 @@ pub fn expiration_set() -> Result<expiration::ExpirationSet, Error> {
 pub fn max_expiration() -> Result<Option<NonZeroU32>, Error> {
     std::env::var(vars::PASTE_MAX_EXPIRATION)
         .ok()
-        .map(|value| value.parse::<u32>().map_err(Error::ParsePasteMaxExpiration))
+        .map(|value| {
+            value
+                .parse::<Expiration>()
+                .map_err(Error::ParsePasteMaxExpiration)
+                .and_then(|exp| {
+                    u32::try_from(exp.duration.as_secs()).map_err(Error::PasteMaxExpirationOverflow)
+                })
+        })
         .transpose()
         .map(|op| op.and_then(NonZero::new))
 }
