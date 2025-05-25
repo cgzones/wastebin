@@ -83,14 +83,6 @@ if (encryptToggle && passwordGroup) {
   });
 }
 
-$("burn-after-reading").addEventListener("change", function() {
-  const disabled = this.checked;
-  const radios = document.querySelectorAll('#expiry-list input[type="radio"]');
-  for (const radio of radios) {
-    radio.disabled = disabled;
-  }
-});
-
 const overlay = $("drop-overlay");
 let dragCounter = 0;
 
