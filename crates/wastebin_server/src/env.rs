@@ -10,10 +10,9 @@ use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, DATABASE_PATH, HTTP_TIMEOUT, MAX_BODY_SIZE,
     PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
-use wastebin_core::{db, expiration};
+use wastebin_core::{db, expiration, expiration::Expiration};
 
 pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
-
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
     #[error("failed to parse {CACHE_SIZE}, expected number of elements: {0}")]
@@ -33,7 +32,7 @@ pub(crate) enum Error {
     #[error("failed to parse {PASTE_EXPIRATIONS}: {0}")]
     ParsePasteExpiration(#[from] expiration::Error),
     #[error("failed to parse {PASTE_MAX_EXPIRATION}: {0}")]
-    ParsePasteMaxExpiration(ParseIntError),
+    ParsePasteMaxExpiration(expiration::Error),
     #[error("unknown theme {0}")]
     UnknownTheme(String),
     #[error("binding to both TCP and Unix socket is not possible")]
@@ -179,9 +178,13 @@ pub fn expiration_set() -> Result<expiration::ExpirationSet, Error> {
 pub fn max_expiration() -> Result<Option<NonZeroU32>, Error> {
     std::env::var(vars::PASTE_MAX_EXPIRATION)
         .ok()
-        .map(|value| value.parse::<u32>().map_err(Error::ParsePasteMaxExpiration))
+        .map(|value| {
+            value
+                .parse::<Expiration>()
+                .map_err(Error::ParsePasteMaxExpiration)
+        })
         .transpose()
-        .map(|op| op.and_then(NonZero::new))
+        .map(|op| op.and_then(|exp| NonZero::new(exp.duration.as_secs() as u32)))
 }
 
 pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
