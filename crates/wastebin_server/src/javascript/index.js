@@ -73,14 +73,9 @@ function filterLangs(ev) {
   }
 }
 
-function burnCheckboxHandler() {
-  $("expiration-list").disabled = $("burn-after-reading").checked;
-}
-
 $("text").addEventListener("drop", dropHandler);
 $("text").addEventListener("dragover", dragOverHandler);
 $("text").addEventListener("keydown", keyDownHandler);
 $("open").addEventListener("click", openFile);
 $("filter").addEventListener("change", filterLangs);
 $("filter").addEventListener("keyup", filterLangs);
-$("burn-after-reading").addEventListener("click", burnCheckboxHandler);
