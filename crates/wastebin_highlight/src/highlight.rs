@@ -170,9 +170,10 @@ impl Highlighter {
     /// Highlight `text` with the given file extension which is used to
     /// determine the right syntax. If not given or does not exist, plain text will be generated.
     pub fn highlight(&self, text: String, ext: Option<String>) -> Result<Html, Error> {
-        let syntax_ref = self
-            .syntax_set
-            .find_syntax_by_extension(ext.as_deref().unwrap_or("txt"))
+        let syntax_ref = ext
+            .as_deref()
+            .filter(|ext| *ext != "txt")
+            .and_then(|ext| self.syntax_set.find_syntax_by_extension(ext))
             .unwrap_or_else(|| {
                 self.syntax_set
                     .find_syntax_by_extension("txt")
