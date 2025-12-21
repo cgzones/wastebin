@@ -204,9 +204,10 @@ impl Highlighter {
             text
         };
 
-        let syntax_ref = self
-            .syntax_set
-            .find_syntax_by_extension(ext.as_deref().unwrap_or("txt"))
+        let syntax_ref = ext
+            .as_deref()
+            .filter(|ext| *ext != "txt")
+            .and_then(|ext| self.syntax_set.find_syntax_by_extension(ext))
             .unwrap_or_else(|| {
                 self.syntax_set
                     .find_syntax_by_extension("txt")
