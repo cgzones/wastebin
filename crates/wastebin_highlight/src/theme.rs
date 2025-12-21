@@ -44,13 +44,13 @@ impl FromStr for Theme {
 impl Theme {
     /// Generate combined light CSS for the given Theme.
     #[must_use]
-    pub fn light_css(&self) -> Vec<u8> {
+    pub fn light_css(self) -> Vec<u8> {
         combined_css("light", &self.light_theme())
     }
 
     /// Return light syntect highlighting theme.
     #[must_use]
-    pub fn light_theme(&self) -> syntect::highlighting::Theme {
+    pub fn light_theme(self) -> syntect::highlighting::Theme {
         let theme_set = two_face::theme::extra();
 
         match self {
@@ -72,13 +72,13 @@ impl Theme {
 
     /// Generate combined dark CSS for the given Theme.
     #[must_use]
-    pub fn dark_css(&self) -> Vec<u8> {
+    pub fn dark_css(self) -> Vec<u8> {
         combined_css("dark", &self.dark_theme())
     }
 
     /// Return dark syntect highlighting theme.
     #[must_use]
-    pub fn dark_theme(&self) -> syntect::highlighting::Theme {
+    pub fn dark_theme(self) -> syntect::highlighting::Theme {
         let theme_set = two_face::theme::extra();
 
         match self {
@@ -98,7 +98,7 @@ impl Theme {
 
     /// Return string representation of the theme name.
     #[must_use]
-    pub fn name(&self) -> &'static str {
+    pub const fn name(self) -> &'static str {
         // Make sure that these match the ones in the `FromStr` implementation.
         match self {
             Theme::Ayu => "ayu",
