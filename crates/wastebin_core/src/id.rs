@@ -45,13 +45,25 @@ impl Id {
         }
     }
 
-    /// Generate a URL path from the string representation and `entry`'s extension.
-    #[must_use]
-    pub fn to_url_path(self, entry: &Entry) -> String {
-        entry
-            .extension
-            .as_ref()
-            .map_or_else(|| format!("{self}"), |ext| format!("{self}.{ext}"))
+    /// Generate a URL path formatter from the string representation and `entry`'s extension.
+    pub fn to_url_path(self, entry: &Entry) -> IdUrlPathFormatter<'_> {
+        IdUrlPathFormatter { id: self, entry }
+    }
+}
+
+#[expect(missing_debug_implementations)]
+#[must_use]
+pub struct IdUrlPathFormatter<'a> {
+    id: Id,
+    entry: &'a Entry,
+}
+
+impl fmt::Display for IdUrlPathFormatter<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self.entry.extension.as_ref() {
+            Some(ext) => write!(f, "{}.{ext}", self.id),
+            None => self.id.fmt(f),
+        }
     }
 }
 
@@ -196,5 +208,35 @@ mod tests {
         ));
         assert!(matches!(Id::from_str("abDE+-1"), Err(Error::WrongSize)));
         assert!(matches!(Id::from_str("abDE+"), Err(Error::WrongSize)));
+    }
+
+    #[test]
+    fn to_url_path_1() {
+        let id = Id::from(0xffff_ffff_u32);
+        let entry = Entry {
+            text: "some test".to_string(),
+            extension: Some("txt".to_string()),
+            expires: None,
+            burn_after_reading: None,
+            uid: None,
+            password: None,
+            title: None,
+        };
+        assert_eq!(id.to_url_path(&entry).to_string(), "+++++d.txt");
+    }
+
+    #[test]
+    fn to_url_path_2() {
+        let id = Id::from(0xffff_ffff_u32);
+        let entry = Entry {
+            text: "some test".to_string(),
+            extension: None,
+            expires: None,
+            burn_after_reading: None,
+            uid: None,
+            password: None,
+            title: None,
+        };
+        assert_eq!(id.to_url_path(&entry).to_string(), "+++++d");
     }
 }
