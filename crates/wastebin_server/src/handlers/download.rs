@@ -41,7 +41,7 @@ pub async fn get(
 
 #[must_use]
 fn get_download(key: &Key, data: Data) -> impl IntoResponse {
-    let filename = data.metadata.title.unwrap_or_else(|| format!("{key}"));
+    let filename = data.metadata.title.unwrap_or_else(|| key.to_string());
 
     let content_type = "text; charset=utf-8";
     let content_disposition =
