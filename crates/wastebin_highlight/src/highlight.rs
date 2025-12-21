@@ -185,7 +185,7 @@ impl Highlighter {
         let mut html = String::from("<table><tbody>");
         let mut scope_stack = ScopeStack::new();
 
-        for (mut line_number, line) in LinesWithEndings::from(&text).enumerate() {
+        for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
             let (formatted, delta) = if line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
                 (line.to_string(), 0)
             } else {
@@ -203,11 +203,9 @@ impl Highlighter {
                 }
             };
 
-            line_number += 1;
-            let line_number = format!(
-                r#"<tr><td class="line-number" id="L{line_number}"><a href=#L{line_number}>{line_number:>4}</a></td>"#
-            );
-            html.push_str(&line_number);
+            let line_number = line_idx + 1;
+            html.write_fmt(format_args!(r#"<tr><td class="line-number" id="L{line_number}"><a href=#L{line_number}>{line_number:>4}</a></td>"#)).expect("string formatting failed");
+
             html.push_str(r#"<td class="line">"#);
 
             if delta < 0 {
