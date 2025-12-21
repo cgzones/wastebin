@@ -114,7 +114,7 @@ fn combined_css(color_scheme: &str, theme: &highlighting::Theme) -> Vec<u8> {
     let fg = theme.settings.foreground.expect("existing color");
     let bg = theme.settings.background.expect("existing color");
 
-    let main_colors = format!(
+    let main_colors = format_args!(
         ":root {{
   color-scheme: {color_scheme};
   --main-bg-color: rgb({}, {}, {}, {});
