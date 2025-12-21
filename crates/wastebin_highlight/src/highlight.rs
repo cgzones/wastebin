@@ -209,7 +209,7 @@ impl Highlighter {
         let mut code = String::from(r#"<div class="src-code"><code>"#);
         let mut scope_stack = ScopeStack::new();
 
-        for (mut line_number, line) in LinesWithEndings::from(&text).enumerate() {
+        for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
             let (formatted, delta) = if line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
                 (line.to_string(), 0)
             } else {
@@ -227,7 +227,7 @@ impl Highlighter {
                 }
             };
 
-            line_number += 1;
+            let line_number = line_idx + 1;
             let _ = write!(
                 html,
                 r##"<div id="L{line_number}"><a href="#L{line_number}">{line_number}</a></div>"##
