@@ -26,6 +26,8 @@ pub(crate) enum Error {
     Id(#[from] id::Error),
     #[error("payload too large")]
     MalformedForm,
+    #[error("rate-limit hit")]
+    RateLimit,
 }
 
 #[derive(Serialize)]
@@ -43,6 +45,7 @@ impl From<Error> for StatusCode {
             Error::Database(
                 db::Error::Delete | db::Error::Crypto(crypto::Error::ChaCha20Poly1305Decrypt),
             ) => StatusCode::FORBIDDEN,
+            Error::RateLimit => StatusCode::TOO_MANY_REQUESTS,
             Error::Database(db::Error::NoPassword) | Error::Id(_) | Error::UrlParsing(_) => {
                 StatusCode::BAD_REQUEST
             }

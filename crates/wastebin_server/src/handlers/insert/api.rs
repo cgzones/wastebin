@@ -5,9 +5,12 @@ use axum::extract::State;
 use axum_extra::extract::cookie::Key;
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::errors::{Error, JsonErrorResponse};
 use crate::handlers::extract::{sign_owner_token, verify_owner_token};
-use wastebin_core::db::{Database, write};
+use wastebin_core::db::write;
+
+use super::common_insert;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -47,7 +50,7 @@ impl From<Entry> for write::Entry {
 }
 
 pub async fn post(
-    State(db): State<Database>,
+    State(appstate): State<AppState>,
     State(key): State<Key>,
     Json(entry): Json<Entry>,
 ) -> Result<Json<RedirectResponse>, JsonErrorResponse> {
@@ -61,13 +64,13 @@ pub async fn post(
         .and_then(|token| verify_owner_token(&key, token))
     {
         Some(uid) => uid,
-        None => db.next_uid().await.map_err(Error::Database)?,
+        None => appstate.db.next_uid().await.map_err(Error::Database)?,
     };
 
     let mut entry: write::Entry = entry.into();
     entry.uid = Some(uid);
 
-    let (id, entry) = db.insert(entry).await.map_err(Error::Database)?;
+    let (id, entry) = common_insert(&appstate, entry).await?;
     let path = format!("/{}", id.to_url_path(&entry));
     let owner = sign_owner_token(&key, uid);
 
