@@ -8,7 +8,7 @@ use reqwest::RequestBuilder;
 use tokio::net::TcpListener;
 
 use crate::cache::Cache;
-use crate::page;
+use crate::{Ratelimiter, page};
 
 use wastebin_core::db::{self, Database};
 use wastebin_core::expiration::ExpirationSet;
@@ -24,6 +24,15 @@ pub(crate) struct StoreCookies(pub bool);
 
 impl Client {
     pub(crate) async fn new(store_cookies: StoreCookies) -> Self {
+        Self::new_with_ratelimit_delete(store_cookies, None).await
+    }
+
+    /// Like [`Self::new`] but with a configurable delete rate limiter, for tests that need to
+    /// exercise the delete limiter itself.
+    pub(crate) async fn new_with_ratelimit_delete(
+        store_cookies: StoreCookies,
+        ratelimit_delete: Option<Arc<Ratelimiter>>,
+    ) -> Self {
         let (db, handler) = Database::new(db::Open::Memory).expect("open memory database");
         let cache = Cache::new(NonZeroUsize::new(128).unwrap()).unwrap();
         let key = Key::generate();
@@ -41,6 +50,14 @@ impl Client {
             key,
             page,
             highlighter: Arc::new(Highlighter::default()),
+            ratelimit_insert: Some(Arc::new(
+                Ratelimiter::builder(60)
+                    .max_tokens(60)
+                    .initial_available(60)
+                    .build()
+                    .unwrap(),
+            )),
+            ratelimit_delete,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0")

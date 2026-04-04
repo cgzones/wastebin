@@ -7,11 +7,19 @@ pub mod raw;
 pub mod robots;
 pub mod theme;
 
+use std::sync::LazyLock;
+use std::time::Instant;
+
 use axum::http::{HeaderValue, header};
 use axum::response::Response;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 
 use crate::handlers::extract::serialize_uids;
+
+pub(crate) static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Minimum number of seconds between two rate-limiting log messages.
+pub(crate) const RATELIMIT_LOG_INTERVAL: u64 = 60;
 
 /// Marks a response as uncacheable by browsers and intermediaries.
 ///
