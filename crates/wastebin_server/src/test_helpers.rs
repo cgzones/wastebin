@@ -43,7 +43,7 @@ impl Client {
             page,
             highlighter: Arc::new(Highlighter::default()),
             ratelimit_insert: Some(Arc::new(
-                Ratelimiter::builder(60, Duration::from_secs(1))
+                Ratelimiter::builder(60)
                     .max_tokens(60)
                     .initial_available(60)
                     .build()

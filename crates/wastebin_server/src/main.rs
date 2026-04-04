@@ -267,8 +267,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
     tracing::debug!("enforcing a maximum expiry of {max_expiration:?}");
-    tracing::debug!("ratelimiting insert amount to {ratelimit_insert:?} per minute");
-    tracing::debug!("ratelimiting delete attempts to {ratelimit_delete:?} per minute");
+    tracing::debug!("ratelimiting insert amount to {ratelimit_insert:?} per second");
+    tracing::debug!("ratelimiting delete attempts to {ratelimit_delete:?} per second");
 
     let page = Arc::new(page::Page::new(
         title,
@@ -282,7 +282,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let ratelimit_insert = ratelimit_insert.map(|rli| {
         let value = rli.get().into();
         Arc::new(
-            Ratelimiter::builder(value, Duration::from_secs(60))
+            Ratelimiter::builder(value)
                 .max_tokens(value)
                 .initial_available(value)
                 .build()
@@ -292,7 +292,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let ratelimit_delete = ratelimit_delete.map(|rld| {
         let value = rld.get().into();
         Arc::new(
-            Ratelimiter::builder(value, Duration::from_secs(60))
+            Ratelimiter::builder(value)
                 .max_tokens(value)
                 .initial_available(value)
                 .build()
