@@ -141,24 +141,25 @@ where
             .headers
             .get(http::header::REFERER)
             .and_then(|referer| referer.to_str().ok())
-            .map(|referer| {
-                if referer.starts_with('/') && !referer.starts_with("//") {
-                    Redirect::to(referer)
-                } else {
-                    referer
-                        .parse::<url::Url>()
-                        .ok()
-                        .map(|url| {
-                            let path = url.path();
-                            url.query().map_or_else(
-                                || Redirect::to(path),
-                                |q| Redirect::to(&format!("{path}?{q}")),
-                            )
-                        })
-                        .unwrap_or_else(|| Redirect::to("/"))
-                }
-            })
-            .unwrap_or_else(|| Redirect::to("/"));
+            .map_or_else(
+                || Redirect::to("/"),
+                |referer| {
+                    if referer.starts_with('/') && !referer.starts_with("//") {
+                        Redirect::to(referer)
+                    } else {
+                        referer.parse::<url::Url>().ok().map_or_else(
+                            || Redirect::to("/"),
+                            |url| {
+                                let path = url.path();
+                                url.query().map_or_else(
+                                    || Redirect::to(path),
+                                    |q| Redirect::to(&format!("{path}?{q}")),
+                                )
+                            },
+                        )
+                    }
+                },
+            );
 
         Ok(SafeReferer(redirect))
     }
