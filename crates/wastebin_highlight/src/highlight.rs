@@ -121,8 +121,7 @@ fn open_span_prefix(formatted: &str) -> usize {
             Some(*balance)
         })
         .min()
-        .map(std::ops::Neg::neg)
-        .unwrap_or(0)
+        .map_or(0, std::ops::Neg::neg)
         .try_into()
         .unwrap_or(0)
 }

@@ -179,7 +179,10 @@ where
 {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
         let redirect = parts
             .headers
             .get(http::header::REFERER)
@@ -203,7 +206,7 @@ where
             })
             .unwrap_or_else(|| Redirect::to("/"));
 
-        Ok(SafeReferer(redirect))
+        std::future::ready(Ok(SafeReferer(redirect)))
     }
 }
 
@@ -282,12 +285,15 @@ where
 {
     type Rejection = Infallible;
 
-    async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        Ok(parts
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
+        std::future::ready(Ok(parts
             .headers
             .get(http::header::ACCEPT_LANGUAGE)
             .and_then(|v| v.to_str().ok())
-            .map_or_else(Lang::default, lang_from_accept_language))
+            .map_or_else(Lang::default, lang_from_accept_language)))
     }
 }
 

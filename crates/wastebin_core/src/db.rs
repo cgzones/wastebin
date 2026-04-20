@@ -493,7 +493,7 @@ impl Handler {
                 }
                 Err(err) => break Err(err)?,
                 Ok(rows) => {
-                    debug_assert!(rows == 1);
+                    debug_assert_eq!(rows, 1);
                     return Ok((id, entry));
                 }
             }

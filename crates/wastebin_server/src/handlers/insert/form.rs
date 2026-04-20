@@ -63,13 +63,12 @@ pub async fn post<E: std::fmt::Debug>(
         // Pick the existing primary uid (first in the cookie list) or mint a new one.
         // Re-set the cookie with the full list unchanged so claimed uids survive.
         let mut uids = uids.map(|Uids(uids)| uids).unwrap_or_default();
-        let primary = match uids.first().copied() {
-            Some(uid) => uid,
-            None => {
-                let uid = appstate.db.next_uid().await?;
-                uids.push(uid);
-                uid
-            }
+        let primary = if let Some(uid) = uids.first().copied() {
+            uid
+        } else {
+            let uid = appstate.db.next_uid().await?;
+            uids.push(uid);
+            uid
         };
 
         let mut entry: write::Entry = entry.into();

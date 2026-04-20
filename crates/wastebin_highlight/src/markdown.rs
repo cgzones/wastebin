@@ -6,7 +6,7 @@ use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Pars
 use crate::highlight::Error;
 use crate::{Highlighter, Html};
 
-/// Render CommonMark `text` to HTML. Fenced code blocks with a known language are syntax
+/// Render `CommonMark` `text` to HTML. Fenced code blocks with a known language are syntax
 /// highlighted via `highlighter`; unknown languages fall back to plain text.
 ///
 /// Raw HTML embedded in the source is passed through the parser and then sanitized by

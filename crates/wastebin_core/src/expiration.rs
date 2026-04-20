@@ -225,29 +225,26 @@ mod tests {
     #[test]
     fn non_default_expiration() {
         let expiration = "60".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(60));
+        assert_eq!(expiration.duration, Duration::from_mins(1));
         assert!(!expiration.default);
     }
 
     #[test]
     fn expiration_with_magnitude() {
         let expiration = "60s".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(60));
+        assert_eq!(expiration.duration, Duration::from_mins(1));
 
         let expiration = "59m".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(59 * 60));
+        assert_eq!(expiration.duration, Duration::from_mins(59));
 
         let expiration = "13h".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(13 * 60 * 60));
+        assert_eq!(expiration.duration, Duration::from_hours(13));
 
         let expiration = "4d".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(4 * 24 * 60 * 60));
+        assert_eq!(expiration.duration, Duration::from_hours(96));
 
         let expiration = "40w".parse::<Expiration>().unwrap();
-        assert_eq!(
-            expiration.duration,
-            Duration::from_secs(40 * 7 * 24 * 60 * 60)
-        );
+        assert_eq!(expiration.duration, Duration::from_hours(6720));
 
         let expiration = "12M".parse::<Expiration>().unwrap();
         assert_eq!(expiration.duration, Duration::from_secs(12 * MONTH_SECS));
@@ -302,7 +299,7 @@ mod tests {
     #[test]
     fn default_expiration() {
         let expiration = "60=d".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_secs(60));
+        assert_eq!(expiration.duration, Duration::from_mins(1));
         assert!(expiration.default);
     }
 
@@ -348,9 +345,9 @@ mod tests {
 
         assert_eq!(expirations.len(), 3);
 
-        assert_eq!(expirations[0].duration, Duration::from_secs(60));
-        assert_eq!(expirations[1].duration, Duration::from_secs(3600));
-        assert_eq!(expirations[2].duration, Duration::from_secs(48000));
+        assert_eq!(expirations[0].duration, Duration::from_mins(1));
+        assert_eq!(expirations[1].duration, Duration::from_hours(1));
+        assert_eq!(expirations[2].duration, Duration::from_mins(800));
 
         assert!(expirations[0].default);
         assert!(!expirations[1].default);
