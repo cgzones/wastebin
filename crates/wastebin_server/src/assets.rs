@@ -25,7 +25,7 @@ const BROTLI_WINDOW: u32 = 22;
 const GZIP_LEVEL: u32 = 9;
 
 /// Maximum age assets may be cached for, given that their routes embed a content hash.
-const MAX_AGE: Duration = Duration::from_secs(60 * 60 * 24 * 30);
+const MAX_AGE: Duration = Duration::from_hours(720);
 
 /// Content coding an asset is available in.
 ///
