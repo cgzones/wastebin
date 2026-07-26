@@ -2675,7 +2675,6 @@ dependencies = [
  "cached",
  "cookie",
  "futures",
- "headers",
  "hex",
  "hostname",
  "http",

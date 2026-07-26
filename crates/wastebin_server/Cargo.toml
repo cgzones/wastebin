@@ -30,7 +30,6 @@ tracing-subscriber = "0.3"
 url = "2"
 wastebin_core = { path = "../wastebin_core/" }
 wastebin_highlight = { path = "../wastebin_highlight/" }
-headers = "0.4.1"
 
 [dev-dependencies]
 itertools = "0.15.0"
