@@ -4,8 +4,9 @@
 
 ### Added
 
-- Press <kbd>Tab</kbd> in the editor to insert a tab character instead of
-  moving focus to the next control.
+- Press <kbd>Tab</kbd> in the editor to insert four spaces instead of moving
+  focus to the next control and <kbd>Shift</kbd>+<kbd>Tab</kbd> to dedent by
+  the same amount.
 
 ### Fixed
 

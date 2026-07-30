@@ -166,6 +166,36 @@ $("open").addEventListener("click", function() {
   input.click();
 });
 
+const INDENT = "    ";
+
+function insertIndent() {
+  // Prefer `execCommand` so the edit stays in the native undo history.
+  if (!document.execCommand("insertText", false, INDENT)) {
+    textarea.setRangeText(INDENT, textarea.selectionStart, textarea.selectionEnd, "end");
+  }
+}
+
+function removeIndent() {
+  const lineStart = textarea.value.lastIndexOf("\n", textarea.selectionStart - 1) + 1;
+  const indent = textarea.value.slice(lineStart, lineStart + INDENT.length).match(/^ +/);
+
+  if (!indent) {
+    return;
+  }
+
+  const width = indent[0].length;
+  const start = textarea.selectionStart;
+  const end = textarea.selectionEnd;
+
+  textarea.setSelectionRange(lineStart, lineStart + width);
+
+  if (!document.execCommand("delete")) {
+    textarea.setRangeText("", lineStart, lineStart + width, "end");
+  }
+
+  textarea.setSelectionRange(Math.max(lineStart, start - width), Math.max(lineStart, end - width));
+}
+
 textarea.addEventListener("keydown", function(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
@@ -179,15 +209,13 @@ textarea.addEventListener("keydown", function(e) {
     return;
   }
 
-  if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+  if (e.key === "Tab" && !e.ctrlKey && !e.metaKey && !e.altKey) {
     e.preventDefault();
 
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-
-    // Prefer `execCommand` so the insertion stays in the native undo history.
-    if (!document.execCommand("insertText", false, "\t")) {
-      textarea.setRangeText("\t", start, end, "end");
+    if (e.shiftKey) {
+      removeIndent();
+    } else {
+      insertIndent();
     }
 
     updateLineNumbers();
