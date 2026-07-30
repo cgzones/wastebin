@@ -1081,21 +1081,20 @@ textarea:focus-visible {
 }
 
 .markdown-body blockquote {
-  margin-inline: calc(-1em - 3px) -1em;
-  padding: 0.1em 1em;
+  margin-inline: -16px;
+  padding: 14px 16px 14px 14px;
   color: var(--fg-dim);
+  border: 1px solid var(--border-soft);
   border-left: 3px solid var(--border);
+  border-radius: 6px;
   background: var(--panel-bg2);
 }
 
+.markdown-body blockquote > :last-child { margin-bottom: 0; }
+
 .markdown-body blockquote[class^="markdown-alert-"] {
   color: var(--fg);
-  border-left-width: 4px;
-  margin-inline: calc(-1em - 4px) -1em;
-  padding: 1em;
 }
-
-.markdown-body blockquote[class^="markdown-alert-"] > :last-child { margin-bottom: 0; }
 
 .markdown-body .markdown-alert-title {
   margin: 0 0 0.4em;

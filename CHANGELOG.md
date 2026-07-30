@@ -7,6 +7,10 @@
 - Press <kbd>Tab</kbd> in the editor to insert a tab character instead of
   moving focus to the next control.
 
+### Fixed
+
+- Blockquote matches codeblocks now.
+
 
 ## 3.7.0
 
