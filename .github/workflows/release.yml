@@ -1,13 +1,43 @@
+name: Release
+
 on:
-  release:
-    types: [created]
+  push:
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (must already exist)
+        required: true
 
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  release:
-    name: Release on ${{ matrix.target }}
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Fail fast if the tag and Cargo.toml version disagree.
+      - name: Verify tag matches Cargo.toml
+        run: |
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          crate="$(cargo metadata --no-deps --format-version=1 \
+            | jq -r '.packages[] | select(.name=="wastebin") | .version')"
+          test "$tag" = "$crate" || { echo "tag $tag != Cargo.toml $crate"; exit 1; }
+      # Release body = the section of CHANGELOG.md matching the tag version.
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          changelog: CHANGELOG.md
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-assets:
+    name: ${{ matrix.target }}
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -15,27 +45,16 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macos-latest
-            suffix: ""
-
           - target: aarch64-apple-darwin
             os: macos-latest
-            suffix: ""
-
           - target: riscv64gc-unknown-linux-gnu
             os: ubuntu-latest
-            suffix: ""
-
           - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
-            suffix: ""
-
           - target: aarch64-unknown-linux-musl
             os: ubuntu-latest
-            suffix: ""
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Build binary
         uses: houseabsolute/actions-rust-cross@v0
@@ -46,16 +65,21 @@ jobs:
           strip: true
 
       - name: Prepare assets
+        id: prepare
         shell: bash
         run: |
-          mv target/${{ matrix.target }}/release/wastebin{,-ctl}${{ matrix.suffix }} .
-          tar --zstd -cf wastebin_${{ github.event.release.tag_name }}_${{ matrix.target }}.tar.zst LICENSE README.md wastebin{,-ctl}${{ matrix.suffix }}
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          mv target/${{ matrix.target }}/release/wastebin{,-ctl} .
+          archive="wastebin_${tag}_${{ matrix.target }}.tar.zst"
+          echo "archive=${archive}" >> "$GITHUB_OUTPUT"
+          tar --zstd -cf "$archive" LICENSE README.md wastebin wastebin-ctl
+          sha256sum "$archive" > "$archive.sha256"
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: wastebin_${{ github.event.release.tag_name }}_${{ matrix.target }}.tar.zst
-          # see https://stackoverflow.com/a/69919067
-          tag_name: ${{ github.event.release.tag_name }}
-          prerelease: false
-          make_latest: true
+          files: |
+            ${{ steps.prepare.outputs.archive }}
+            ${{ steps.prepare.outputs.archive }}.sha256
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
