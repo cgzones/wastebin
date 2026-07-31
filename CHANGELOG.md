@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+
+## 3.7.1
+
+**2026-07-31**
+
 ### Added
 
 - Press <kbd>Tab</kbd> in the editor to insert four spaces instead of moving
