@@ -7,10 +7,13 @@
     <title>{{ page.title }}{% block title_content %}{% endblock %}</title>
     {% match theme %}
       {% when Theme::Dark %}
+        <meta name="color-scheme" content="dark">
         <link rel="stylesheet" href="{{ page.assets.css.dark.route() }}">
       {% when Theme::Light %}
+        <meta name="color-scheme" content="light">
         <link rel="stylesheet" href="{{ page.assets.css.light.route() }}">
       {% when Theme::System %}
+        <meta name="color-scheme" content="dark light">
         <link rel="stylesheet" href="{{ page.assets.css.dark.route() }}" media="(prefers-color-scheme: dark)">
         <link rel="stylesheet" href="{{ page.assets.css.light.route() }}" media="(prefers-color-scheme: light)">
     {% endmatch %}
