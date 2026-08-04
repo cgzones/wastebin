@@ -206,6 +206,16 @@ impl Highlighter {
         ext != "txt" && self.syntax_set.find_syntax_by_extension(ext).is_some()
     }
 
+    /// Return `true` if `ext` names any extension the syntax set lists.
+    ///
+    /// Unlike [`Highlighter::knows_extension`], `txt` counts: that exclusion only serves callers
+    /// asking whether two extensions render alike, and `txt` is one of the values [`Self::syntaxes`]
+    /// offers, so rejecting it here would turn the site's own plain-text choice into an error.
+    #[must_use]
+    pub fn has_extension(&self, ext: &str) -> bool {
+        self.syntax_set.find_syntax_by_extension(ext).is_some()
+    }
+
     /// Return `true` if `ext` resolves to the Markdown syntax, i.e. the paste can also be served
     /// as rendered HTML.
     #[must_use]

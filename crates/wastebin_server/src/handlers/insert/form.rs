@@ -188,6 +188,62 @@ mod tests {
         Ok(())
     }
 
+    /// The extension is interpolated into the `Location` this insert answers with, so anything
+    /// that is not a plain extension either breaks the header outright or walks the redirect off
+    /// the paste. Both used to be accepted: a CRLF answered an inserted paste with a 500, and a
+    /// `../` pointed the client at an unrelated path.
+    #[tokio::test]
+    async fn unknown_extension_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for extension in [
+            "zzzznope",
+            "../../admin",
+            "a/b",
+            "?x=1",
+            "a\r\nX-Injected: yes",
+        ] {
+            let data = Entry {
+                text: String::from("FooBarBaz"),
+                extension: Some(String::from(extension)),
+                ..Default::default()
+            };
+
+            let res = client.post_form().form(&data).send().await?;
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "extension {extension:?} was not rejected"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Every value the language picker offers must survive the check above — `txt` in particular,
+    /// which `Highlighter::knows_extension` deliberately excludes for unrelated reasons.
+    #[tokio::test]
+    async fn offered_extensions_are_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for extension in ["rs", "txt", "md", "CMakeLists.txt", ".env"] {
+            let data = Entry {
+                text: String::from("FooBarBaz"),
+                extension: Some(String::from(extension)),
+                ..Default::default()
+            };
+
+            let res = client.post_form().form(&data).send().await?;
+            assert_eq!(
+                res.status(),
+                StatusCode::SEE_OTHER,
+                "extension {extension:?} was rejected"
+            );
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn zero_expiration_still_means_never() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
