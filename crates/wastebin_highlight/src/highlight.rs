@@ -86,14 +86,15 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
 }
 
 /// Return `true` if `scope` will be used to render a Markdown link.
-#[must_use]
 fn is_markdown_link(scope: Scope) -> bool {
     #[expect(deprecated)]
     let repo = SCOPE_REPO.lock().expect("lock");
 
     (0..scope.len()).all(|index| {
-        let atom = repo.atom_str(scope.atom_at(index as usize));
-        atom == "markup" || atom == "underline" || atom == "link" || atom == "markdown"
+        matches!(
+            repo.atom_str(scope.atom_at(index as usize)),
+            "markup" | "underline" | "link" | "markdown"
+        )
     })
 }
 
