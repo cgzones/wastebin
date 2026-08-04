@@ -541,6 +541,10 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         Ok::<(), Box<dyn std::error::Error>>(())
     };
 
+    // Awaiting the handler as well is what ends the process when the database thread dies —
+    // otherwise the server would stay up answering `BackendGone` to every request forever. It
+    // terminates in turn because `try_join!` drops the finished serve future, closing the last
+    // `Database` and with it the channel the handler reads.
     tokio::try_join!(serve, async { db_handler.await.map_err(Into::into) })?;
 
     Ok(())
