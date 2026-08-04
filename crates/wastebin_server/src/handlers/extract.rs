@@ -179,13 +179,22 @@ where
     }
 }
 
+/// Whether `value` stays on this origin: exactly one leading slash, and no second slash or
+/// backslash after it. Browsers resolve both `//host` and `/\host` as an authority, so either
+/// would leave the origin.
+fn is_same_origin_path(value: &str) -> bool {
+    value
+        .strip_prefix('/')
+        .is_some_and(|rest| !rest.starts_with('/') && !rest.starts_with('\\'))
+}
+
 /// Reduce a `Referer` header value to a same-origin redirect target.
 fn referer_redirect(referer: Option<&str>) -> Redirect {
     let Some(referer) = referer else {
         return Redirect::to("/");
     };
 
-    if referer.starts_with('/') && !referer.starts_with("//") {
+    if is_same_origin_path(referer) {
         return Redirect::to(referer);
     }
 
@@ -193,9 +202,16 @@ fn referer_redirect(referer: Option<&str>) -> Redirect {
         return Redirect::to("/");
     };
 
-    match url.query() {
-        Some(query) => Redirect::to(&format!("{}?{query}", url.path())),
-        None => Redirect::to(url.path()),
+    // The path of an absolute URL can itself start with a slash run, so it needs the same check.
+    let target = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_owned(),
+    };
+
+    if is_same_origin_path(&target) {
+        Redirect::to(&target)
+    } else {
+        Redirect::to("/")
     }
 }
 

@@ -40,6 +40,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn off_origin_referers_fall_back_to_root() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+
+        for referer in [
+            r"/\evil.example.com/phish",
+            "https://evil.example.com//attacker.example.com/p",
+            r"https://evil.example.com/\attacker.example.com",
+        ] {
+            let response = client
+                .get("/theme")
+                .header(REFERER, referer)
+                .query(&[("pref", "dark")])
+                .send()
+                .await?;
+
+            let location = response.headers().get("location").unwrap().to_str()?;
+            assert_eq!(location, "/", "referer {referer} redirected to {location}");
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn protocol_relative_referer_falls_back_to_root() -> Result<(), Box<dyn std::error::Error>>
     {
         let client = Client::new(StoreCookies(true)).await;
