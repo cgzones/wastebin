@@ -1,10 +1,27 @@
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 
 use ammonia::Builder;
 use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, html};
 
 use crate::highlight::Error;
 use crate::{Highlighter, Html};
+
+const OPTIONS: Options = Options::ENABLE_TABLES
+    .union(Options::ENABLE_STRIKETHROUGH)
+    .union(Options::ENABLE_TASKLISTS)
+    .union(Options::ENABLE_FOOTNOTES)
+    .union(Options::ENABLE_GFM);
+
+/// Shared ammonia sanitizer. Extends the default allowlist with `class` on any tag (needed for
+/// syntax-highlight spans and alert blockquotes) and the handful of attributes pulldown-cmark
+/// emits on task-list checkboxes.
+static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
+    let mut builder = Builder::default();
+    builder.add_generic_attributes(["class"]);
+    builder.add_tags(["input"]);
+    builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
+    builder
+});
 
 /// Render `CommonMark` `text` to HTML. Fenced code blocks with a known language are syntax
 /// highlighted via `highlighter`; unknown languages fall back to plain text.
@@ -13,19 +30,13 @@ use crate::{Highlighter, Html};
 /// [`ammonia`], so tags like `<details>` or `<kbd>` survive while `<script>`, inline event
 /// handlers, `javascript:` URLs and other XSS vectors are stripped.
 pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
-    let options = Options::ENABLE_TABLES
-        | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES
-        | Options::ENABLE_GFM;
-
-    let parser = Parser::new_ext(text, options);
+    let parser = Parser::new_ext(text, OPTIONS);
     let events = rewrite_events(parser, highlighter)?;
 
     let mut raw = String::with_capacity(text.len());
     html::push_html(&mut raw, events.into_iter());
 
-    Ok(Html::new(sanitizer().clean(&raw).to_string()))
+    Ok(Html::new(SANITIZER.clean(&raw).to_string()))
 }
 
 fn rewrite_events<'a>(
@@ -60,20 +71,6 @@ fn rewrite_events<'a>(
     }
 
     Ok(out)
-}
-
-/// Shared ammonia sanitizer. Extends the default allowlist with `class` on any tag (needed for
-/// syntax-highlight spans and alert blockquotes) and the handful of attributes pulldown-cmark
-/// emits on task-list checkboxes.
-fn sanitizer() -> &'static Builder<'static> {
-    static CLEANER: OnceLock<Builder<'static>> = OnceLock::new();
-    CLEANER.get_or_init(|| {
-        let mut builder = Builder::default();
-        builder.add_generic_attributes(["class"]);
-        builder.add_tags(["input"]);
-        builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
-        builder
-    })
 }
 
 /// Return the HTML injected at the top of a GFM alert blockquote.
