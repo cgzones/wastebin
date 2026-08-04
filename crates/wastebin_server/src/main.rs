@@ -365,10 +365,6 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
             ServiceBuilder::new()
                 .layer(DefaultBodyLimit::max(max_body_size))
                 .layer(TraceLayer::new_for_http().make_span_with(PathOnlyMakeSpan))
-                .layer(TimeoutLayer::with_status_code(
-                    StatusCode::REQUEST_TIMEOUT,
-                    timeout,
-                ))
                 .layer(
                     CompressionLayer::new()
                         .compress_when(DefaultPredicate::new().and(SizeAbove::new(256))),
@@ -377,6 +373,13 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
                 // than by amending the one it was handed: inside, every header added here was
                 // dropped again for exactly the statuses that layer renders.
                 .layer(from_fn(security_headers_layer))
+                // Inside the header layer: this one synthesises its response rather than amending
+                // one, so from outside its 408 left with no CSP, no `nosniff` and no
+                // `Cache-Control` — on a response whose URL names a paste.
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::REQUEST_TIMEOUT,
+                    timeout,
+                ))
                 .layer(from_fn_with_state(state.clone(), handle_service_errors)),
         )
         .with_state(state);
@@ -544,6 +547,34 @@ mod tests {
 
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
+        }
+
+        Ok(())
+    }
+
+    /// `TimeoutLayer` synthesises its response itself, so sitting outside the header layer meant a
+    /// 408 left with no CSP, no `nosniff`, no `X-Frame-Options` and no `Cache-Control` — on a
+    /// response whose URL names a paste.
+    #[tokio::test]
+    async fn a_timed_out_response_keeps_its_security_headers()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new_timing_out(StoreCookies(false)).await;
+
+        // A route whose work goes to a blocking thread, so the request is certain to yield and
+        // the already-elapsed timer is certain to win; a handler that never awaits can outrun it.
+        let res = client.get("/burn/aaaaaaaaaaa.txt").send().await?;
+        assert_eq!(res.status(), http::StatusCode::REQUEST_TIMEOUT);
+
+        for header in [
+            http::header::CONTENT_SECURITY_POLICY,
+            http::header::X_CONTENT_TYPE_OPTIONS,
+            X_FRAME_OPTIONS,
+            http::header::CACHE_CONTROL,
+        ] {
+            assert!(
+                res.headers().contains_key(&header),
+                "408 is missing {header}",
+            );
         }
 
         Ok(())

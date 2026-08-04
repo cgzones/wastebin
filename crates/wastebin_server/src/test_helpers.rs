@@ -24,7 +24,13 @@ pub(crate) struct StoreCookies(pub bool);
 
 impl Client {
     pub(crate) async fn new(store_cookies: StoreCookies) -> Self {
-        Self::new_with_ratelimits(store_cookies, None, None).await
+        Self::build(store_cookies, None, None, Duration::from_secs(30)).await
+    }
+
+    /// Like [`Self::new`] but with a request timeout short enough that every request hits it, for
+    /// tests whose subject is the timed-out response itself.
+    pub(crate) async fn new_timing_out(store_cookies: StoreCookies) -> Self {
+        Self::build(store_cookies, None, None, Duration::ZERO).await
     }
 
     /// Like [`Self::new`] but with a configurable delete rate limiter, for tests that need to
@@ -48,6 +54,21 @@ impl Client {
         store_cookies: StoreCookies,
         ratelimit_delete: Option<Arc<Ratelimiter>>,
         ratelimit_password: Option<Arc<Ratelimiter>>,
+    ) -> Self {
+        Self::build(
+            store_cookies,
+            ratelimit_delete,
+            ratelimit_password,
+            Duration::from_secs(30),
+        )
+        .await
+    }
+
+    async fn build(
+        store_cookies: StoreCookies,
+        ratelimit_delete: Option<Arc<Ratelimiter>>,
+        ratelimit_password: Option<Arc<Ratelimiter>>,
+        timeout: Duration,
     ) -> Self {
         let (db, handler) =
             Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
@@ -96,7 +117,7 @@ impl Client {
         tokio::spawn(handler);
 
         tokio::spawn(async move {
-            let app = crate::make_app(state, Duration::from_secs(30), 1024 * 1024);
+            let app = crate::make_app(state, timeout, 1024 * 1024);
 
             axum::serve(listener, app)
                 .with_graceful_shutdown(crate::shutdown_signal())
