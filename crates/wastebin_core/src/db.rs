@@ -151,6 +151,9 @@ enum Command {
     Purge {
         result: oneshot::Sender<Result<Vec<Id>, Error>>,
     },
+    Ping {
+        result: oneshot::Sender<Result<(), Error>>,
+    },
 }
 
 /// Database opening modes
@@ -465,6 +468,7 @@ impl Handler {
                 Command::NextUid { result } => reply(result, self.next_uid()),
                 Command::List { result } => reply(result, self.list()),
                 Command::Purge { result } => reply(result, self.purge()),
+                Command::Ping { result } => reply(result, self.ping()),
             }
         }
     }
@@ -622,6 +626,12 @@ impl Handler {
         )?;
 
         Ok(uid)
+    }
+
+    fn ping(&self) -> Result<(), Error> {
+        self.conn.query_row("SELECT 1", [], |_| Ok(()))?;
+
+        Ok(())
     }
 
     fn list(&self) -> Result<Vec<ListEntry>, Error> {
@@ -784,6 +794,14 @@ impl Database {
     pub async fn purge(&self) -> Result<Vec<Id>, Error> {
         self.call(|result| Command::Purge { result }).await
     }
+
+    /// Round-trip a trivial query through the handler.
+    ///
+    /// Proves the channel is open, the actor loop is consuming commands, and the connection still
+    /// answers — the three things a dead actor takes down together.
+    pub async fn ping(&self) -> Result<(), Error> {
+        self.call(|result| Command::Ping { result }).await
+    }
 }
 
 #[cfg(test)]
@@ -909,6 +927,15 @@ mod tests {
 
         assert!(uid1 < uid2);
         assert!(uid2 < uid3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ping_round_trips() -> Result<(), Box<dyn std::error::Error>> {
+        let db = new_db()?;
+
+        assert!(db.ping().await.is_ok());
 
         Ok(())
     }
