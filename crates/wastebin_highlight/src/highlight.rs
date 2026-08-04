@@ -334,13 +334,24 @@ fn is_markdown_syntax(syntax: &SyntaxReference) -> bool {
 /// a working one. Only the schemes that navigate somewhere are allowed; anything else is shown as
 /// text, which is what it reads as anyway.
 fn is_navigable_target(target: &str) -> bool {
+    fn dropped_by_browsers(c: char) -> bool {
+        c.is_whitespace() || c.is_control()
+    }
+
     // Browsers drop tabs, newlines and other control characters before resolving a URL, so
     // `java&#9;script:alert(1)` navigates exactly like `javascript:alert(1)`. Compare with them
-    // taken out rather than trusting the literal spelling.
-    let cleaned: String = target
-        .chars()
-        .filter(|c| !c.is_whitespace() && !c.is_control())
-        .collect();
+    // taken out rather than trusting the literal spelling — but only build a copy when there is
+    // something to take out, which for an ordinary link there is not.
+    let cleaned: Cow<'_, str> = if target.contains(dropped_by_browsers) {
+        Cow::Owned(
+            target
+                .chars()
+                .filter(|c| !dropped_by_browsers(*c))
+                .collect(),
+        )
+    } else {
+        Cow::Borrowed(target)
+    };
 
     let Some(colon) = cleaned.find(':') else {
         // No scheme at all, so the target is relative and resolves against this origin.
