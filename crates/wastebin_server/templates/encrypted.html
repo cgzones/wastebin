@@ -7,7 +7,7 @@
 {% block content %}
 <div class="flex-center">
   <div class="dialog">
-    <div class="dialog-header">{{ lang.t("encrypted.title") }}</div>
+    <h1 class="dialog-header">{{ lang.t("encrypted.title") }}</h1>
     <form action="/{{ id }}" method="post">
       <input type="hidden" name="confirm_burn" value="1">
       <div class="dialog-section">

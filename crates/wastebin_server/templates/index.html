@@ -23,6 +23,8 @@
     </header>
     <div id="content-area">
       <main class="editor-area">
+        {# This template replaces `base.html`'s whole body, so it carries its own heading. #}
+        <h1 class="sr-only">{{ lang.t("heading.new_paste") }}</h1>
         <div class="editor" id="editor-wrap">
           <div id="line-numbers" aria-hidden="true"></div>
           <textarea id="text" name="text" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" placeholder="{{ lang.t("index.placeholder.paste") }}" autofocus required></textarea>

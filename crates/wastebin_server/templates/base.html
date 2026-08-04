@@ -39,6 +39,8 @@
       </header>
       <div id="content-area">
         <main>
+          {# Pages whose heading is visible render it themselves and leave this empty. #}
+          {% block heading %}{% endblock %}
           {% block content %}{% endblock %}
         </main>
         {% block panel %}{% endblock %}

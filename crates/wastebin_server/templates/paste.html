@@ -11,6 +11,10 @@
 
 {% block title_content %}{% if let Some(title) = title %}: {{ title }}{% endif %}{% endblock %}
 
+{# The visible title lives in the nav bar and is absent on an untitled paste, so the heading is
+   carried here instead of being promoted there. #}
+{% block heading %}<h1 class="sr-only">{% if let Some(title) = title %}{{ title }}{% else %}{{ lang.t("heading.paste") }}{% endif %}</h1>{% endblock %}
+
 {% block head %}
 <script defer src="{{ page.assets.paste_js.route() }}"></script>
 {% endblock %}

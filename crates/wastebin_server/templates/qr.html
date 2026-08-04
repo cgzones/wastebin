@@ -6,9 +6,12 @@
   </a>
 {% endblock %}
 
+{# This page's heading is visible, so the hidden one `paste.html` supplies is dropped. #}
+{% block heading %}{% endblock %}
+
 {% block content %}
   <div class="flex-center">
-    <div class="centered-label">{{ lang.t("qr.label") }}</div>
+    <h1 class="centered-label">{{ lang.t("qr.label") }}</h1>
     <div class="qr-container">
       <svg xmlns="http://www.w3.org/2000/svg" version="1.1" role="img" aria-label="{{ lang.t("qr.label") }}" viewBox="0 0 {{ code.size() + 4 }} {{ code.size() + 4 }}" stroke="none" width="16rem">
         <rect width="100%" height="100%" fill="#fafafa"/>

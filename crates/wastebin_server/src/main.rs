@@ -772,6 +772,49 @@ mod tests {
         Ok(())
     }
 
+    /// Every page used to reach the browser with no heading at all: the visible titles were
+    /// `<div class="dialog-header">`, and the pages without one had nothing to offer instead.
+    #[tokio::test]
+    async fn every_page_carries_a_heading() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let insert = async |text: &str, extension: Option<&str>, burn: bool| {
+            let data = crate::handlers::insert::form::Entry {
+                text: text.to_owned(),
+                extension: extension.map(ToOwned::to_owned),
+                burn_after_reading: burn.then(|| String::from("on")),
+                ..Default::default()
+            };
+            let res = client.post_form().form(&data).send().await.unwrap();
+            let location = res.headers().get("location").unwrap().to_str().unwrap();
+            location.rsplit('/').next().unwrap().to_owned()
+        };
+
+        let plain = insert("hello", None, false).await;
+        let markdown = insert("# Doc", Some("md"), false).await;
+        let burning = insert("secret", None, true).await;
+
+        let paths = [
+            String::from("/"),
+            format!("/{plain}"),
+            format!("/md/{markdown}"),
+            format!("/qr/{plain}"),
+            format!("/burn/{burning}"),
+            format!("/{burning}"),
+            String::from("/nope"),
+        ];
+
+        for path in paths {
+            let body = client.get(&path).send().await?.text().await?;
+            assert!(
+                body.contains("<h1"),
+                "{path} rendered without a heading: {body}"
+            );
+        }
+
+        Ok(())
+    }
+
     /// Every template that ships a `<button>`, so a new one cannot quietly default to `submit`.
     const TEMPLATES: [(&str, &str); 7] = [
         ("index.html", include_str!("../templates/index.html")),
