@@ -1,7 +1,9 @@
 use std::sync::LazyLock;
 
 use ammonia::Builder;
-use pulldown_cmark::{BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, html};
+use pulldown_cmark::{
+    BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html,
+};
 
 use crate::highlight::Error;
 use crate::{Highlighter, Html};
@@ -51,17 +53,17 @@ fn rewrite_events<'a>(
             Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
                 pending = Some((lang.to_string(), String::new()));
             }
-            Event::Text(text) if pending.is_some() => {
-                if let Some((_, buf)) = pending.as_mut() {
-                    buf.push_str(&text);
-                }
-            }
-            Event::End(pulldown_cmark::TagEnd::CodeBlock) if pending.is_some() => {
-                if let Some((lang, code)) = pending.take() {
+            Event::Text(text) => match pending.as_mut() {
+                Some((_, buf)) => buf.push_str(&text),
+                None => out.push(Event::Text(text)),
+            },
+            Event::End(TagEnd::CodeBlock) => match pending.take() {
+                Some((lang, code)) => {
                     let html = highlighter.highlight_code_block(&code, &lang)?;
                     out.push(Event::Html(CowStr::from(html)));
                 }
-            }
+                None => out.push(Event::End(TagEnd::CodeBlock)),
+            },
             Event::Start(Tag::BlockQuote(Some(kind))) => {
                 out.push(Event::Start(Tag::BlockQuote(Some(kind))));
                 out.push(Event::Html(CowStr::from(alert_title(kind))));
