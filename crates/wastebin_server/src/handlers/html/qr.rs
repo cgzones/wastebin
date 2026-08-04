@@ -6,10 +6,9 @@ use url::Url;
 
 use crate::cache::Key;
 use crate::handlers::extract::{Theme, Uids, can_delete};
-use crate::handlers::html::paste::is_markdown_ext;
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
-use crate::{Error, Page};
+use crate::{Error, Highlighter, Page};
 use wastebin_core::db::Database;
 use wastebin_core::db::read::Metadata;
 use wastebin_core::expiration::Expiration;
@@ -19,6 +18,7 @@ pub async fn get(
     Path(id): Path<String>,
     State(page): State<Page>,
     State(db): State<Database>,
+    State(highlighter): State<Highlighter>,
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
@@ -39,7 +39,7 @@ pub async fn get(
             theme,
             lang,
             can_delete: can_delete(uids.as_ref(), owner_uid),
-            is_markdown: is_markdown_ext(key.ext.as_deref()),
+            is_markdown: highlighter.is_markdown(key.ext.as_deref()),
             key,
             is_available: true,
             code,
