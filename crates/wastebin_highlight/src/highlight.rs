@@ -1,4 +1,5 @@
 use std::fmt::Write;
+use std::sync::Arc;
 
 use syntect::html::{ClassStyle, ClassedHTMLGenerator, line_tokens_to_classed_spans};
 use syntect::parsing::{BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxSet};
@@ -17,8 +18,10 @@ pub enum Error {
 
 const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
 
+/// Rendered HTML, shared so that cloning is a refcount bump rather than a copy of the whole
+/// document.
 #[derive(Clone)]
-pub struct Html(String);
+pub struct Html(Arc<str>);
 
 pub struct Highlighter {
     syntax_set: SyntaxSet,
@@ -240,7 +243,7 @@ impl Highlighter {
         code.push_str("</code></div>");
         html.push_str(&code);
 
-        Ok(Html(html))
+        Ok(Html::new(html))
     }
 
     /// Highlight a fenced code block. `token` is the info string (e.g. `rust`, `py`); unknown or
@@ -293,11 +296,11 @@ impl Html {
     /// Wrap an already-HTML string. Callers are responsible for ensuring the content is safe to
     /// insert into a page (i.e. produced by a trusted renderer).
     pub(crate) fn new(html: String) -> Self {
-        Self(html)
+        Self(Arc::from(html))
     }
 
     #[must_use]
-    pub fn into_inner(self) -> String {
+    pub fn into_inner(self) -> Arc<str> {
         self.0
     }
 }

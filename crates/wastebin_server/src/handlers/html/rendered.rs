@@ -77,8 +77,7 @@ pub async fn get(
             let rendered: Arc<str> =
                 tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
                     .await??
-                    .into_inner()
-                    .into();
+                    .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache rendered markdown");

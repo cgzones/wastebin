@@ -91,7 +91,7 @@ fn alert_title(kind: BlockQuoteKind) -> String {
 mod tests {
     use super::*;
 
-    fn render_string(text: &str, highlighter: &Highlighter) -> Result<String, Error> {
+    fn render_string(text: &str, highlighter: &Highlighter) -> Result<std::sync::Arc<str>, Error> {
         render(text, highlighter).map(Html::into_inner)
     }
 

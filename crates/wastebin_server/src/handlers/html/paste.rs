@@ -145,8 +145,7 @@ pub async fn get(
             let html: Arc<str> =
                 tokio::task::spawn_blocking(move || highlighter.highlight(text, ext))
                     .await??
-                    .into_inner()
-                    .into();
+                    .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");
