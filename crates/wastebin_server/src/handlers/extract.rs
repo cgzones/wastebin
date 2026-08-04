@@ -136,10 +136,25 @@ pub(crate) fn can_delete(uids: Option<&Uids>, owner_uid: Option<i64>) -> bool {
 
 /// Serialize a uid list back into the cookie wire format.
 pub(crate) fn serialize_uids(uids: &[i64]) -> String {
-    uids.iter()
-        .map(i64::to_string)
-        .collect::<Vec<_>>()
-        .join(",")
+    use std::fmt::Write as _;
+
+    /// Widest an [`i64`] spells out — `i64::MIN` takes twenty characters — plus its separator.
+    const UID_WIDTH: usize = 21;
+
+    // Written straight into the result: collecting a `String` per uid and a `Vec` to hold them
+    // only to join them again allocated once per entry plus twice more. Sized for the worst case
+    // up front so the one buffer is never grown either; a list of a few entries makes the slack
+    // a few dozen bytes.
+    let mut out = String::with_capacity(uids.len().saturating_mul(UID_WIDTH));
+
+    for (index, uid) in uids.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        let _ = write!(out, "{uid}");
+    }
+
+    out
 }
 
 /// Marks a signed payload as an owner token rather than a `uid` cookie's uid list.
