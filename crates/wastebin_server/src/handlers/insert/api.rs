@@ -6,11 +6,11 @@ use axum_extra::extract::cookie::Key;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::errors::{Error, JsonErrorResponse};
+use crate::errors::JsonErrorResponse;
 use crate::handlers::extract::{sign_owner_token, verify_owner_token};
 use wastebin_core::db::write;
 
-use super::common_insert;
+use super::{Owner, common_insert};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -60,19 +60,18 @@ pub async fn post(
     // pastes under one identity; otherwise mint a fresh uid. A raw uid is never
     // trusted — only a server-signed token is accepted, and an invalid one falls
     // back to minting rather than failing the request.
-    let uid = match entry
+    let owner = match entry
         .owner
         .as_deref()
         .and_then(|token| verify_owner_token(&key, token))
     {
-        Some(uid) => uid,
-        None => appstate.db.next_uid().await.map_err(Error::Database)?,
+        Some(uid) => Owner::Existing(uid),
+        None => Owner::Mint,
     };
 
-    let mut entry: write::Entry = entry.into();
-    entry.uid = Some(uid);
+    let entry: write::Entry = entry.into();
 
-    let (id, entry) = common_insert(&appstate, entry).await?;
+    let (id, entry, uid) = common_insert(&appstate, entry, owner).await?;
     let path = format!(
         "/{}",
         crate::cache::Key {

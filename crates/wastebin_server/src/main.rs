@@ -558,6 +558,7 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
     async fn rewritten_errors_keep_their_security_headers() -> Result<(), Box<dyn std::error::Error>>
     {
         let client = Client::new(StoreCookies(false)).await;
