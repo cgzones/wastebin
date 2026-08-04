@@ -7,11 +7,13 @@ const textarea = $("text");
 
 function updateLineNumbers() {
   const count = Math.max(1, textarea.value.split("\n").length);
-  let html = "";
+  const rows = document.createDocumentFragment();
   for (let i = 1; i <= count; i++) {
-    html += "<div>" + i + "</div>";
+    const row = document.createElement("div");
+    row.textContent = i;
+    rows.appendChild(row);
   }
-  lineNumbers.innerHTML = html;
+  lineNumbers.replaceChildren(rows);
 }
 
 function syncScroll() {

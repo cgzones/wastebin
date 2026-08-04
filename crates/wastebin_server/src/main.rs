@@ -115,10 +115,10 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
     // Rendered Markdown may embed remote images via `![](…)`; relax img-src for that route only,
     // and only to TLS origins so a paste cannot force a plaintext request.
     const CSP_STRICT: HeaderValue = HeaderValue::from_static(
-        "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
+        "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ; require-trusted-types-for 'script' ; trusted-types 'none' ;",
     );
     const CSP_RENDERED: HeaderValue = HeaderValue::from_static(
-        "default-src 'none'; script-src 'self'; img-src 'self' https: data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
+        "default-src 'none'; script-src 'self'; img-src 'self' https: data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ; require-trusted-types-for 'script' ; trusted-types 'none' ;",
     );
 
     let csp = if req.uri().path().starts_with("/md/") {
@@ -431,6 +431,56 @@ mod tests {
         assert!(!policy.contains("clipboard"), "got: {policy}");
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn csp_requires_trusted_types() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        // Both the strict and the Markdown-relaxed policy must carry it.
+        for path in ["/", "/md/"] {
+            let res = client.get(path).send().await?;
+            let csp = res
+                .headers()
+                .get(http::header::CONTENT_SECURITY_POLICY)
+                .expect("csp header")
+                .to_str()?
+                .to_owned();
+
+            assert!(
+                csp.contains("require-trusted-types-for 'script'"),
+                "path {path}, csp: {csp}"
+            );
+            assert!(csp.contains("trusted-types 'none'"), "path {path}, csp: {csp}");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn shipped_scripts_use_no_trusted_types_sinks() {
+        const SCRIPTS: [(&str, &str); 4] = [
+            ("index.js", include_str!("javascript/index.js")),
+            ("paste.js", include_str!("javascript/paste.js")),
+            ("burn.js", include_str!("javascript/burn.js")),
+            (
+                "password-toggle.js",
+                include_str!("javascript/password-toggle.js"),
+            ),
+        ];
+
+        // `trusted-types 'none'` forbids creating a policy, so any of these would throw at
+        // runtime rather than fail closed.
+        for (name, source) in SCRIPTS {
+            for sink in [
+                "innerHTML",
+                "outerHTML",
+                "insertAdjacentHTML",
+                "document.write",
+            ] {
+                assert!(!source.contains(sink), "{name} uses {sink}");
+            }
+        }
     }
 
     #[tokio::test]
