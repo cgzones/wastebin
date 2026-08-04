@@ -191,7 +191,7 @@ mod tests {
     async fn unknown_paste() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
-        let res = client.get("/000000").send().await?;
+        let res = client.get("/aaaaaa").send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())

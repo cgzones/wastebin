@@ -152,7 +152,7 @@ mod tests {
     async fn missing_paste_is_not_found() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
-        let res = client.get("/md/000000").send().await?;
+        let res = client.get("/md/aaaaaa").send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
