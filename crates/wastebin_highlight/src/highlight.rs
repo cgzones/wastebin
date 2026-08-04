@@ -213,6 +213,14 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
     }
 }
 
+/// Return `true` if `syntax` is the one Markdown resolves to.
+///
+/// Taken on an already-resolved reference so [`Highlighter::is_markdown`] and the emitter agree
+/// without either of them spelling the name a second time.
+fn is_markdown_syntax(syntax: &SyntaxReference) -> bool {
+    syntax.name == MARKDOWN_SYNTAX_NAME
+}
+
 /// Return `true` if `scope` will be used to render a Markdown link.
 fn is_markdown_link(scope: Scope) -> bool {
     #[expect(deprecated)]
@@ -364,7 +372,7 @@ impl Highlighter {
     /// callers may treat them as interchangeable.
     #[must_use]
     pub fn knows_extension(&self, ext: &str) -> bool {
-        ext != "txt" && self.syntax_set.find_syntax_by_extension(ext).is_some()
+        ext != "txt" && self.has_extension(ext)
     }
 
     /// Return `true` if `ext` names any extension the syntax set lists.
@@ -381,7 +389,7 @@ impl Highlighter {
     /// as rendered HTML.
     #[must_use]
     pub fn is_markdown(&self, ext: Option<&str>) -> bool {
-        self.syntax_for(ext).name == MARKDOWN_SYNTAX_NAME
+        is_markdown_syntax(self.syntax_for(ext))
     }
 
     /// Highlight `text` with the given file extension which is used to
@@ -394,7 +402,7 @@ impl Highlighter {
             Cow::Borrowed(_) => text,
         };
         let syntax_ref = self.syntax_for(ext.as_deref());
-        let is_markdown = syntax_ref.name == MARKDOWN_SYNTAX_NAME;
+        let is_markdown = is_markdown_syntax(syntax_ref);
         let mut parse_state = ParseState::new(syntax_ref);
         let mut scope_stack = ScopeStack::new();
 
