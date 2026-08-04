@@ -19,6 +19,7 @@ pub mod vars {
     pub const BASE_URL: &str = "WASTEBIN_BASE_URL";
     /// Number of cached items.
     pub const CACHE_SIZE: &str = "WASTEBIN_CACHE_SIZE";
+    pub const CACHE_MAX_BYTES: &str = "WASTEBIN_CACHE_MAX_BYTES";
     /// Path to the database file.
     pub const DATABASE_PATH: &str = "WASTEBIN_DATABASE_PATH";
     /// Time before a request times out.

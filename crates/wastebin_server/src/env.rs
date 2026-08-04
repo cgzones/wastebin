@@ -8,8 +8,8 @@ use axum_extra::extract::cookie::Key;
 
 use wastebin_core::env::var;
 use wastebin_core::env::vars::{
-    self, ADDRESS_PORT, BASE_URL, CACHE_SIZE, HTTP_TIMEOUT, MAX_BODY_SIZE, PASTE_EXPIRATIONS,
-    PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
+    self, ADDRESS_PORT, BASE_URL, CACHE_MAX_BYTES, CACHE_SIZE, HTTP_TIMEOUT, MAX_BODY_SIZE,
+    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
 };
 use wastebin_core::{db, expiration, expiration::Expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
@@ -20,6 +20,8 @@ pub const DEFAULT_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) enum Error {
     #[error("failed to construct cache")]
     CacheConstruction(#[from] cached::BuildError),
+    #[error("failed to parse {CACHE_MAX_BYTES}, expected number of bytes: {0}")]
+    CacheMaxBytes(std::num::ParseIntError),
     #[error("failed to parse {CACHE_SIZE}, expected number of elements: {0}")]
     CacheSize(ParseIntError),
     #[error(transparent)]
@@ -87,6 +89,16 @@ pub fn cache_size() -> Result<Option<NonZeroUsize>, Error> {
             .parse::<usize>()
             .map(NonZeroUsize::new)
             .map_err(Error::CacheSize)
+    })
+}
+
+/// Ceiling on the memory the render cache may hold.
+///
+/// The entry count alone does not bound it: a single rendered document can reach tens of
+/// megabytes, so a hundred of them would be gigabytes.
+pub fn cache_max_bytes() -> Result<usize, Error> {
+    var(vars::CACHE_MAX_BYTES)?.map_or(Ok(64 * 1024 * 1024), |value| {
+        value.parse::<usize>().map_err(Error::CacheMaxBytes)
     })
 }
 

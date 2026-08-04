@@ -197,6 +197,15 @@ impl Highlighter {
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
     }
 
+    /// Return `true` if `ext` selects a syntax of its own.
+    ///
+    /// Extensions that do not are all rendered as plain text, so they produce identical output and
+    /// callers may treat them as interchangeable.
+    #[must_use]
+    pub fn knows_extension(&self, ext: &str) -> bool {
+        ext != "txt" && self.syntax_set.find_syntax_by_extension(ext).is_some()
+    }
+
     /// Return `true` if `ext` resolves to the Markdown syntax, i.e. the paste can also be served
     /// as rendered HTML.
     #[must_use]
