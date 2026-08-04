@@ -13,9 +13,12 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 rusqlite_migration = { version = "2", default-features = false }
 rust-argon2 = "3.0.0"
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync"] }
 tracing = { workspace = true }
 zstd = "0.13"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 
 [lints]
 workspace = true
