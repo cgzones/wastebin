@@ -21,7 +21,11 @@ pub(crate) struct Entry {
     pub text: String,
     pub extension: Option<String>,
     pub expires: Option<String>,
+    // The browser form always submits these, empty or not, but a scripted client has no reason to
+    // send a field it is not using — and an absent one is exactly the empty string's meaning.
+    #[serde(default)]
     pub password: String,
+    #[serde(default)]
     pub title: String,
     #[serde(rename = "burn-after-reading")]
     pub burn_after_reading: Option<String>,
@@ -226,6 +230,28 @@ mod tests {
 
         let content = res.text().await?;
         assert_eq!(content, "FooBarBaz");
+
+        Ok(())
+    }
+
+    /// Omitting an optional field is not a malformed request: the browser form always sends
+    /// `password` and `title`, but a scripted client posting only `text` was rejected as
+    /// unprocessable with nothing naming the missing field.
+    #[tokio::test]
+    async fn omitted_optional_fields_are_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .post_form()
+            .body("text=FooBarBaz")
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let res = client.get(&format!("/raw{location}")).send().await?;
+        assert_eq!(res.text().await?, "FooBarBaz");
 
         Ok(())
     }
