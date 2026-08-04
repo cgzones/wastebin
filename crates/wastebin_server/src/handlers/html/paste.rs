@@ -88,8 +88,13 @@ pub async fn get(
         if !new_uids.contains(&claimed_uid) {
             new_uids.push(claimed_uid);
         }
+        // Redirect to the parsed key rather than the raw path, which is otherwise free to
+        // steer the `Location` header off-site.
+        let key: Key = id
+            .parse()
+            .map_err(|err| make_error(err, page.clone(), theme, lang))?;
         let cookie = uid_cookie(&new_uids);
-        return Ok((jar.add(cookie), Redirect::to(&format!("/{id}"))).into_response());
+        return Ok((jar.add(cookie), Redirect::to(&format!("/{key}"))).into_response());
     }
 
     async {
@@ -188,6 +193,34 @@ mod tests {
 
         let res = client.get("/000000").send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn owner_handoff_does_not_redirect_off_site() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = crate::handlers::insert::api::Entry {
+            text: "FooBarBaz".to_string(),
+            ..Default::default()
+        };
+        let payload = client
+            .post_json()
+            .json(&entry)
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let res = client
+            .get(&format!("/%2F%2Fevil.example.com?owner={}", payload.owner))
+            .send()
+            .await?;
+
+        // The id does not parse, so this must not turn into a redirect at all.
+        assert_ne!(res.status(), StatusCode::SEE_OTHER);
+        assert!(res.headers().get("location").is_none());
 
         Ok(())
     }
