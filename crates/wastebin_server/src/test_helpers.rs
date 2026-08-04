@@ -24,7 +24,7 @@ pub(crate) struct StoreCookies(pub bool);
 
 impl Client {
     pub(crate) async fn new(store_cookies: StoreCookies) -> Self {
-        Self::new_with_ratelimit_delete(store_cookies, None).await
+        Self::new_with_ratelimits(store_cookies, None, None).await
     }
 
     /// Like [`Self::new`] but with a configurable delete rate limiter, for tests that need to
@@ -32,6 +32,22 @@ impl Client {
     pub(crate) async fn new_with_ratelimit_delete(
         store_cookies: StoreCookies,
         ratelimit_delete: Option<Arc<Ratelimiter>>,
+    ) -> Self {
+        Self::new_with_ratelimits(store_cookies, ratelimit_delete, None).await
+    }
+
+    /// Like [`Self::new`] but with a configurable password-attempt limiter.
+    pub(crate) async fn new_with_ratelimit_password(
+        store_cookies: StoreCookies,
+        ratelimit_password: Option<Arc<Ratelimiter>>,
+    ) -> Self {
+        Self::new_with_ratelimits(store_cookies, None, ratelimit_password).await
+    }
+
+    async fn new_with_ratelimits(
+        store_cookies: StoreCookies,
+        ratelimit_delete: Option<Arc<Ratelimiter>>,
+        ratelimit_password: Option<Arc<Ratelimiter>>,
     ) -> Self {
         let (db, handler) =
             Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
@@ -68,6 +84,7 @@ impl Client {
                     .unwrap(),
             )),
             ratelimit_delete,
+            ratelimit_password,
         };
 
         let listener = TcpListener::bind("127.0.0.1:0")

@@ -12,11 +12,14 @@ use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use std::sync::Arc;
+
+use axum::extract::FromRef;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use ratelimit::Ratelimiter;
 
-use crate::Error;
 use crate::handlers::extract::serialize_uids;
+use crate::{AppState, Error};
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -44,6 +47,31 @@ pub(crate) fn uid_cookie(uids: &[i64]) -> Cookie<'static> {
     cookie.set_same_site(SameSite::Lax);
     cookie.set_secure(true);
     cookie
+}
+
+/// The limiter guarding password attempts, for the read handlers that do not take the whole state.
+#[derive(Clone)]
+pub(crate) struct PasswordRatelimit(Option<Arc<Ratelimiter>>);
+
+impl FromRef<AppState> for PasswordRatelimit {
+    fn from_ref(state: &AppState) -> Self {
+        Self(state.ratelimit_password.clone())
+    }
+}
+
+impl PasswordRatelimit {
+    /// Spend a token for one password attempt.
+    ///
+    /// Every attempt derives a key with argon2 — 64 MiB and ten passes over four lanes — before
+    /// the ciphertext is looked at, so a wrong password costs exactly what a right one does and an
+    /// attacker needs only one encrypted paste's id to keep every core busy and that memory
+    /// resident. Call this only where a password was actually supplied: a read without one costs
+    /// nothing and must not spend from the same bucket.
+    pub(crate) fn check(&self) -> Result<(), Error> {
+        static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
+
+        check_ratelimit(self.0.as_deref(), &RL_LOGGED, "password attempts")
+    }
 }
 
 /// Take a token from `limiter`, logging `what` at most once per minute.

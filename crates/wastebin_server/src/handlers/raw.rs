@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::Key;
+use crate::handlers::PasswordRatelimit;
 use crate::handlers::extract::{Accepts, Password, Theme};
 use crate::handlers::html::{ErrorResponse, make_error, password_input};
 use crate::i18n::Lang;
@@ -10,10 +11,12 @@ use wastebin_core::db;
 use wastebin_core::db::read::Entry;
 
 /// GET handler for raw content of a paste.
+#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
     State(page): State<Page>,
+    State(ratelimit): State<PasswordRatelimit>,
     theme: Theme,
     lang: Lang,
     accepts: Accepts,
@@ -22,6 +25,10 @@ pub async fn get(
     async {
         let password = password.map(|Password(password)| password);
         let key: Key = id.parse()?;
+
+        if password.is_some() {
+            ratelimit.check()?;
+        }
 
         match db.get(key.id, password).await {
             Ok(Entry::Regular(data) | Entry::Burned(data)) => Ok(data.text.into_response()),
@@ -41,6 +48,54 @@ pub async fn get(
 mod tests {
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::{StatusCode, header};
+
+    /// Every password attempt runs a full argon2 derivation before the ciphertext is looked at, so
+    /// a wrong password costs a right one's 64 MiB and four busy lanes. Nothing bounded how many
+    /// an anonymous caller could ask for.
+    #[tokio::test]
+    async fn password_attempts_are_rate_limited() -> Result<(), Box<dyn std::error::Error>> {
+        let limiter = std::sync::Arc::new(
+            ratelimit::Ratelimiter::builder(1)
+                .max_tokens(1)
+                .initial_available(1)
+                .build()?,
+        );
+        let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
+
+        let paste = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "SECRETPAYLOAD".to_string(),
+                password: Some("hunter2".to_string()),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+        let raw = format!("/raw{}", paste.path);
+
+        // The single token buys one attempt; the next is refused before argon2 is entered.
+        let first = client
+            .get(&raw)
+            .header("wastebin-password", "wrong")
+            .send()
+            .await?;
+        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+
+        let second = client
+            .get(&raw)
+            .header("wastebin-password", "wrong")
+            .send()
+            .await?;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        // A read carrying no password never touches the bucket.
+        let none = client.get(&raw).send().await?;
+        assert_eq!(none.status(), StatusCode::OK, "prompt should still render");
+
+        Ok(())
+    }
 
     /// Without a password the browser gets a prompt, which is a 200 carrying a form. A client
     /// asking for JSON cannot fill that in and must be told the paste needs a password instead.

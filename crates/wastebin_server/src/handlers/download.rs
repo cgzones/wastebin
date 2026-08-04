@@ -7,6 +7,7 @@ use axum_extra::headers::HeaderValue;
 
 use crate::Page;
 use crate::cache::Key;
+use crate::handlers::PasswordRatelimit;
 use crate::handlers::extract::{Accepts, Password, Theme};
 use crate::handlers::html::{ErrorResponse, make_error, password_input};
 use crate::i18n::Lang;
@@ -14,10 +15,12 @@ use wastebin_core::db::read::{Data, Entry};
 use wastebin_core::db::{self, Database};
 
 /// GET handler for raw content of a paste.
+#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
     State(page): State<Page>,
+    State(ratelimit): State<PasswordRatelimit>,
     theme: Theme,
     lang: Lang,
     accepts: Accepts,
@@ -26,6 +29,10 @@ pub async fn get(
     async {
         let key: Key = id.parse()?;
         let password = password.map(|Password(password)| password);
+
+        if password.is_some() {
+            ratelimit.check()?;
+        }
 
         match db.get(key.id, password).await {
             Ok(Entry::Regular(data) | Entry::Burned(data)) => {

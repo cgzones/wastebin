@@ -42,6 +42,7 @@ pub async fn get(
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
     State(render_pool): State<crate::render::Renderer>,
+    State(ratelimit): State<crate::handlers::PasswordRatelimit>,
     Path(id): Path<String>,
     uids: Option<Uids>,
     theme: Theme,
@@ -58,6 +59,11 @@ pub async fn get(
             .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
             .map(|form| Password::from(form.password.as_bytes().to_vec()));
         let no_password = password.is_none();
+
+        if !no_password {
+            ratelimit.check()?;
+        }
+
         let key: Key = id.parse()?;
 
         // A cached render implies the paste was available and unencrypted when stored, so its

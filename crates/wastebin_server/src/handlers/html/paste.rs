@@ -3,7 +3,7 @@ use std::sync::Arc;
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, FromRef, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::SignedCookieJar;
 use axum_extra::extract::cookie::Key as CookieKey;
@@ -12,7 +12,7 @@ use serde::Deserialize;
 use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Accepts, Theme, Uids, can_delete, verify_owner_token};
 use crate::handlers::html::{BurnConfirmation, ErrorResponse, make_error, password_input};
-use crate::handlers::uid_cookie;
+use crate::handlers::{PasswordRatelimit, uid_cookie};
 use crate::i18n::Lang;
 use crate::{AppState, Page};
 use wastebin_core::crypto::Password;
@@ -136,6 +136,11 @@ pub async fn get(
             .map(|password| Password::from(password.as_bytes().to_vec()));
         let confirmed = form.as_ref().and_then(|form| form.confirm_burn.as_deref()) == Some("1");
         let no_password = password.is_none();
+
+        if !no_password {
+            PasswordRatelimit::from_ref(&appstate).check()?;
+        }
+
         // This route is also every single-segment path no other route claimed, so a value that is
         // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
         // "that is not a valid paste identifier" described a paste the visitor never asked for.

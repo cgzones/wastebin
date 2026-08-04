@@ -199,6 +199,7 @@ run-time behavior:
 | `WASTEBIN_UNIX_SOCKET_PATH`       | Path to a Unix socket to accept connections from.             |                       |
 | `WASTEBIN_RATELIMIT_INSERT`       | Maximum allowed creation amount of new pastes per second, process-wide across all clients. | `0` (disabled)        |
 | `WASTEBIN_RATELIMIT_DELETE`       | Maximum allowed delete attempts of existing pastes per second, process-wide across all clients. | `0` (disabled)       |
+| `WASTEBIN_RATELIMIT_PASSWORD`     | Maximum allowed password attempts on encrypted pastes per second, process-wide across all clients. Each attempt costs a full argon2 derivation, so this bounds what an anonymous caller can make the server spend. | `0` (disabled) |
 | `RUST_LOG`                        | Log level. Besides the typical `trace`, `debug`, `info` etc. keys, you can also set the `tower_http` key to a log level to get additional request and response logs. |  |
 
 > [!NOTE]
