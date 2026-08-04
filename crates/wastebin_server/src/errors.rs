@@ -27,6 +27,8 @@ pub(crate) enum Error {
     PayloadTooLarge,
     #[error("unsupported media type")]
     UnsupportedMediaType,
+    #[error("method not allowed")]
+    MethodNotAllowed,
     #[error("missing or invalid uid cookie")]
     MissingUid,
     #[error("cross-site request")]
@@ -65,6 +67,7 @@ impl Error {
             Error::MalformedForm => "error.malformed_form",
             Error::PayloadTooLarge => "error.payload_too_large",
             Error::UnsupportedMediaType => "error.unsupported_media_type",
+            Error::MethodNotAllowed => "error.method_not_allowed",
             Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
                 "error.too_deeply_nested"
             }
@@ -120,6 +123,7 @@ impl From<&Error> for StatusCode {
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            Error::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Error::Join(_)
             | Error::QrCode(_)
             | Error::Database(_)
