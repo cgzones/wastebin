@@ -92,18 +92,16 @@ function measureRows(lines) {
 
 function updateLineNumbers() {
   const rows = measureRows(textarea.value.split("\n"));
-  let html = "";
+  const cells = document.createDocumentFragment();
   for (let i = 0; i < rows.length; i++) {
-    html += "<div>" + (i + 1) + "</div>";
+    const cell = document.createElement("div");
+    cell.textContent = i + 1;
+    // Set through the CSSOM: the page's CSP (`style-src 'self' data:`) rejects
+    // `style` attributes coming from markup.
+    if (rows[i] > 1) cell.style.setProperty("--rows", rows[i]);
+    cells.appendChild(cell);
   }
-  lineNumbers.innerHTML = html;
-
-  // Set through the CSSOM: the page's CSP (`style-src 'self' data:`) rejects
-  // `style` attributes coming from markup, which would drop `--rows` again.
-  const cells = lineNumbers.children;
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i] > 1) cells[i].style.setProperty("--rows", rows[i]);
-  }
+  lineNumbers.replaceChildren(cells);
 
   syncScroll();
 }
