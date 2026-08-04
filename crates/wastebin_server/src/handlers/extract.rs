@@ -141,13 +141,31 @@ pub(crate) fn serialize_uids(uids: &[i64]) -> String {
         .join(",")
 }
 
+/// Marks a signed payload as an owner token rather than a `uid` cookie's uid list.
+///
+/// The signature covers the value alone — not the name it is stored under — so a bare uid signed
+/// for the token was byte-for-byte a valid single-entry `uid` cookie. The token travels in a URL,
+/// where it reaches browser history, bookmarks and anything logging full URLs, so whoever picked
+/// one out could paste it straight into a `Cookie:` header instead of going through the handoff.
+///
+/// Marking the payload does not stop it verifying under another name — nothing can, given what is
+/// signed — but `parse_uids` drops the marked form as junk, so a replayed token now names no
+/// identity at all. A uid list never carries the marker, so it does not verify as a token either.
+const OWNER_TOKEN_PREFIX: &str = "owner:";
+
 /// Sign a single uid using the same key as the `uid` cookie. The returned
 /// string is meant to be carried in the `?owner=` query of a paste URL so the
 /// server can promote it to a proper signed cookie on first GET.
+///
+/// The token names an identity, not a paste, and identities are reused across every paste a
+/// client creates — so whoever holds one can delete all of them, those made after the token was
+/// issued included. That is what makes the handoff a grouping mechanism; treat the token as the
+/// long-lived credential it is.
 pub(crate) fn sign_owner_token(key: &Key, uid: i64) -> String {
     let mut jar = cookie::CookieJar::new();
-    jar.signed_mut(key).add(Cookie::new("uid", uid.to_string()));
-    jar.get("uid")
+    jar.signed_mut(key)
+        .add(Cookie::new("owner", format!("{OWNER_TOKEN_PREFIX}{uid}")));
+    jar.get("owner")
         .map(|cookie| cookie.value().to_string())
         .unwrap_or_default()
 }
@@ -155,10 +173,16 @@ pub(crate) fn sign_owner_token(key: &Key, uid: i64) -> String {
 /// Verify a token produced by [`sign_owner_token`] and recover the uid.
 pub(crate) fn verify_owner_token(key: &Key, token: &str) -> Option<i64> {
     let mut jar = cookie::CookieJar::new();
-    jar.add(Cookie::new("uid", token.to_owned()));
+    jar.add(Cookie::new("owner", token.to_owned()));
     jar.signed(key)
-        .get("uid")
-        .and_then(|cookie| cookie.value().parse::<i64>().ok())
+        .get("owner")
+        .and_then(|cookie| {
+            cookie
+                .value()
+                .strip_prefix(OWNER_TOKEN_PREFIX)
+                .map(str::to_owned)
+        })
+        .and_then(|uid| uid.parse::<i64>().ok())
 }
 
 impl<S> FromRequestParts<S> for Uids
@@ -475,6 +499,43 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The signature covers the cookie's name, so signing the token under `uid` made it byte-for-
+    /// byte a valid single-entry `uid` cookie. Since the token rides in a URL — browser history,
+    /// bookmarks, any proxy logging one — a leak could be replayed as a cookie directly, skipping
+    /// the handoff the design routes claims through.
+    #[test]
+    fn an_owner_token_is_not_also_a_uid_cookie() {
+        let key = Key::generate();
+        let token = sign_owner_token(&key, 42);
+
+        // The signature covers the value alone, so the token still verifies when presented under
+        // another name. What has to hold is that its payload names no identity.
+        let mut jar = cookie::CookieJar::new();
+        jar.add(Cookie::new("uid", token.clone()));
+        let claimed = jar
+            .signed(&key)
+            .get("uid")
+            .map(|cookie| parse_uids(cookie.value_trimmed()))
+            .unwrap_or_default();
+        assert!(
+            claimed.is_empty(),
+            "an owner token conferred {claimed:?} when replayed as a uid cookie"
+        );
+
+        // The reverse, too: a cookie value must not stand in for a token.
+        let mut jar = cookie::CookieJar::new();
+        jar.signed_mut(&key).add(Cookie::new("uid", "42"));
+        let cookie_value = jar.get("uid").expect("signed cookie").value().to_owned();
+        assert_eq!(
+            verify_owner_token(&key, &cookie_value),
+            None,
+            "a uid cookie verified as an owner token"
+        );
+
+        // And the token still round-trips.
+        assert_eq!(verify_owner_token(&key, &token), Some(42));
+    }
 
     fn request(origin: Option<&str>, host: Option<&str>) -> RequestOrigin {
         RequestOrigin {
