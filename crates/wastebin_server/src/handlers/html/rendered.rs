@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
 use crate::handlers::NoStore;
-use crate::handlers::extract::{Theme, Uids, can_delete};
+use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasteForm;
 use crate::handlers::html::{
     BurnConfirmation, ErrorResponse, FormAction, make_error, password_input,
@@ -49,6 +49,7 @@ pub async fn get(
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
@@ -157,7 +158,7 @@ pub async fn get(
         Ok(response)
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 #[cfg(test)]

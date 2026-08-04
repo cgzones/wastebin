@@ -7,7 +7,7 @@ use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::{Key, valid_extension};
-use crate::handlers::extract::{RequestOrigin, Theme, Uids};
+use crate::handlers::extract::{Accepts, RequestOrigin, Theme, Uids};
 use crate::handlers::html::make_error;
 use crate::handlers::uid_cookie;
 use crate::i18n::Lang;
@@ -64,6 +64,7 @@ impl TryFrom<Entry> for write::Entry {
     }
 }
 
+#[expect(clippy::too_many_arguments)]
 pub async fn post(
     State(appstate): State<AppState>,
     jar: SignedCookieJar,
@@ -71,16 +72,29 @@ pub async fn post(
     theme: Theme,
     lang: Lang,
     origin: RequestOrigin,
+    accepts: Accepts,
     entry: Result<Form<Entry>, FormRejection>,
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
     let page: Page = appstate.page.clone();
 
     if origin.is_cross_site(&page.base_url) {
-        return Err(make_error(crate::Error::CrossSite, page, theme, lang));
+        return Err(make_error(
+            crate::Error::CrossSite,
+            page,
+            theme,
+            lang,
+            accepts,
+        ));
     }
 
     let Ok(Form(entry)) = entry else {
-        return Err(make_error(crate::Error::MalformedForm, page, theme, lang));
+        return Err(make_error(
+            crate::Error::MalformedForm,
+            page,
+            theme,
+            lang,
+            accepts,
+        ));
     };
 
     if let Some(extension) = &entry.extension
@@ -91,6 +105,7 @@ pub async fn post(
             page,
             theme,
             lang,
+            accepts,
         ));
     }
 
@@ -133,7 +148,7 @@ pub async fn post(
         Ok((jar.add(uid_cookie(&uids)), Redirect::to(&url)))
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 #[cfg(test)]

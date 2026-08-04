@@ -8,7 +8,7 @@ use axum_extra::headers::HeaderValue;
 use crate::Page;
 use crate::cache::Key;
 use crate::handlers::NoStore;
-use crate::handlers::extract::{Password, Theme};
+use crate::handlers::extract::{Accepts, Password, Theme};
 use crate::handlers::html::{ErrorResponse, FormAction, make_error, password_input};
 use crate::i18n::Lang;
 use wastebin_core::db::read::{Data, Entry};
@@ -21,6 +21,7 @@ pub async fn get(
     State(page): State<Page>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
     async {
@@ -33,7 +34,9 @@ pub async fn get(
             burn,
         } = match db.get(key.id, password).await {
             Ok(entry) => entry,
-            Err(db::Error::NoPassword) => {
+            // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on
+            // an HTML form and would only see a 200 where it expected the paste.
+            Err(db::Error::NoPassword) if accepts == Accepts::Html => {
                 return Ok(password_input(&page, theme, lang, FormAction::source(&key)));
             }
             Err(err) => return Err(err.into()),
@@ -52,7 +55,7 @@ pub async fn get(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 /// Build the `Content-Disposition` for `filename`.

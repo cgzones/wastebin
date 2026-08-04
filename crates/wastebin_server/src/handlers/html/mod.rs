@@ -13,8 +13,9 @@ use axum::response::{IntoResponse, Response};
 
 use crate::Page;
 use crate::cache::Key;
+use crate::errors::JsonErrorResponse;
 use crate::handlers::NoStore;
-use crate::handlers::extract::Theme;
+use crate::handlers::extract::{Accepts, Theme};
 use crate::i18n::Lang;
 
 /// Target of an interstitial's submit form, i.e. the view the paste was requested from.
@@ -91,28 +92,54 @@ pub(crate) fn password_input(
     .no_store()
 }
 
-/// Error response carrying a status code and the page itself.
-pub(crate) type ErrorResponse = (StatusCode, Error);
+/// Error response in whichever representation the client asked for.
+pub(crate) enum ErrorResponse {
+    Html(StatusCode, Box<Error>),
+    Json(JsonErrorResponse),
+}
 
-/// Create an error response from `error` consisting of [`StatusCode`] derive from `error` as well
-/// as a rendered page with a description.
+impl IntoResponse for ErrorResponse {
+    fn into_response(self) -> Response {
+        match self {
+            ErrorResponse::Html(status, page) => (status, *page).into_response(),
+            ErrorResponse::Json(json) => json.into_response(),
+        }
+    }
+}
+
+/// Create an error response from `error`, carrying a [`StatusCode`] derived from `error` and a
+/// description of it.
 ///
-/// The page shows a fixed, translated message for the kind of failure. The error's own
+/// The description is a fixed, translated message for the kind of failure. The error's own
 /// `Display` — which may quote sqlite, syntect or a panic payload — is only logged.
+///
+/// A client that asked for JSON gets the same envelope the API uses, rather than a rendered page
+/// it has no way to read.
 #[must_use]
-pub fn make_error(error: crate::Error, page: Page, theme: Theme, lang: Lang) -> ErrorResponse {
+pub fn make_error(
+    error: crate::Error,
+    page: Page,
+    theme: Theme,
+    lang: Lang,
+    accepts: Accepts,
+) -> ErrorResponse {
+    if accepts == Accepts::Json {
+        return ErrorResponse::Json(error.into());
+    }
+
     error.log();
 
     let description = lang.t(error.message_key());
+    let status = StatusCode::from(&error);
 
-    (
-        error.into(),
-        Error {
+    ErrorResponse::Html(
+        status,
+        Box::new(Error {
             page,
             theme,
             lang,
             description,
-        },
+        }),
     )
 }
 
@@ -149,6 +176,68 @@ mod tests {
         let body = res.text().await?;
         assert!(!body.contains("uid cookie"), "body: {body}");
         assert!(body.contains("not allowed"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// A client that asked for JSON got a full HTML error page it had no way to read.
+    #[tokio::test]
+    async fn json_clients_get_json_errors() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in [
+            "/aaaaaa",
+            "/md/aaaaaa",
+            "/raw/aaaaaa",
+            "/dl/aaaaaa",
+            "/qr/aaaaaa",
+        ] {
+            let res = client
+                .get(path)
+                .header(header::ACCEPT, "application/json")
+                .send()
+                .await?;
+
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "path {path}");
+            assert_eq!(
+                res.headers().get(header::CONTENT_TYPE).unwrap(),
+                "application/json",
+                "path {path}"
+            );
+
+            let body = res.text().await?;
+            assert!(
+                body.starts_with("{\"message\":"),
+                "path {path} body: {body}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// A browser must keep getting the rendered page, and so must a client stating no preference
+    /// or refusing JSON outright.
+    #[tokio::test]
+    async fn html_clients_still_get_pages() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for accept in [
+            "text/html,application/xhtml+xml,*/*;q=0.8",
+            "*/*",
+            "application/json;q=0, */*;q=1",
+        ] {
+            let res = client
+                .get("/aaaaaa")
+                .header(header::ACCEPT, accept)
+                .send()
+                .await?;
+
+            assert_eq!(
+                res.headers().get(header::CONTENT_TYPE).unwrap(),
+                "text/html; charset=utf-8",
+                "accept {accept}"
+            );
+        }
 
         Ok(())
     }

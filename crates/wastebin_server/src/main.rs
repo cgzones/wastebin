@@ -34,7 +34,7 @@ use tower_http::trace::{MakeSpan, TraceLayer};
 use crate::assets::Asset;
 use crate::cache::Cache;
 use crate::errors::Error;
-use crate::handlers::extract::Theme;
+use crate::handlers::extract::{Accepts, Theme};
 use crate::handlers::{delete, download, html, insert, raw, robots, theme};
 use crate::i18n::Lang;
 use crate::render::Renderer;
@@ -206,6 +206,7 @@ async fn handle_service_errors(
     State(page): State<Page>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
     req: Request,
     next: Next,
 ) -> Response {
@@ -217,7 +218,7 @@ async fn handle_service_errors(
         _ => return response,
     };
 
-    html::make_error(error, page, theme, lang).into_response()
+    html::make_error(error, page, theme, lang, accepts).into_response()
 }
 
 /// Build a rate limiter refilling `per_second` tokens every second.
@@ -489,7 +490,10 @@ mod tests {
         let client = Client::new(StoreCookies(false)).await;
         let res = client.get("/").send().await?;
 
-        assert_eq!(res.headers().get(http::header::X_XSS_PROTECTION).unwrap(), "0");
+        assert_eq!(
+            res.headers().get(http::header::X_XSS_PROTECTION).unwrap(),
+            "0"
+        );
 
         Ok(())
     }
