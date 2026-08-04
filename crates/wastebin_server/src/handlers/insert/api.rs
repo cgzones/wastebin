@@ -95,16 +95,16 @@ pub async fn post(
 
 #[cfg(test)]
 mod tests {
+    use super::Entry;
     use crate::handlers::extract::PASSWORD_HEADER_NAME;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
-    use wastebin_core::db::write::Entry;
 
     #[test]
     fn empty_password_is_none() -> Result<(), Box<dyn std::error::Error>> {
         let data = r#"{"text": "foo", "password": ""}"#;
-        let entry: super::Entry = serde_json::from_str(data)?;
-        let entry = Entry::from(entry);
+        let entry: Entry = serde_json::from_str(data)?;
+        let entry = wastebin_core::db::write::Entry::from(entry);
         assert!(entry.password.is_none());
 
         Ok(())

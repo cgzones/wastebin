@@ -147,13 +147,12 @@ pub mod write {
     use crate::db::Error;
     use async_compression::tokio::bufread::ZstdEncoder;
     use chacha20poly1305::XNonce;
-    use serde::{Deserialize, Serialize};
     use std::io::Cursor;
     use std::num::NonZeroU32;
     use tokio::io::AsyncReadExt;
 
     /// An uncompressed entry to be inserted into the database.
-    #[derive(Default, Debug, Serialize, Deserialize)]
+    #[derive(Default, Debug)]
     pub struct Entry {
         /// Content
         pub text: String,
