@@ -452,30 +452,25 @@ impl Handler {
         write::DatabaseEntry { entry, data, nonce }: write::DatabaseEntry,
     ) -> Result<(Id, write::Entry), Error> {
         let mut counter = 0;
-        let title = entry.title.clone();
         let nonce = nonce.as_ref().map(|n| n.as_slice());
+        // `datetime('now', NULL)` yields NULL, i.e. no expiration.
+        let expires = entry.expires.map(|expires| format!("{expires} seconds"));
 
         loop {
             let id = Id::rand();
 
-            let result = match entry.expires {
-                None => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, title) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                    params![id.to_i64(), entry.uid, data, entry.burn_after_reading, nonce, title],
-                ),
-                Some(expires) => self.conn.execute(
-                    "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7)",
-                    params![
-                        id.to_i64(),
-                        entry.uid,
-                        data,
-                        entry.burn_after_reading,
-                        nonce,
-                        format!("{expires} seconds"),
-                        title,
-                    ],
-                ),
-            };
+            let result = self.conn.execute(
+                "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7)",
+                params![
+                    id.to_i64(),
+                    entry.uid,
+                    data,
+                    entry.burn_after_reading,
+                    nonce,
+                    expires,
+                    entry.title,
+                ],
+            );
 
             match result {
                 Err(rusqlite::Error::SqliteFailure(
