@@ -16,6 +16,9 @@ pub(crate) struct Asset {
     mime: mime::Mime,
     /// Actual asset content.
     content: Bytes,
+    /// Whether `route` carries a content hash. Only then can the bytes behind it never change,
+    /// which is what makes an indefinite, unvalidated cache entry safe.
+    hashed: bool,
 }
 
 /// Asset kind.
@@ -39,6 +42,7 @@ impl Asset {
             route: format!("/{name}"),
             mime,
             content: content.into(),
+            hashed: false,
         }
     }
 
@@ -61,6 +65,7 @@ impl Asset {
             route,
             mime,
             content: content.into(),
+            hashed: true,
         }
     }
 
@@ -72,13 +77,20 @@ impl Asset {
     /// Serve this asset without copying its content.
     #[must_use]
     pub fn response(&self) -> Response {
+        // Only a hashed route is safe to pin: its URL changes with its content, so a client can
+        // never be stuck on a stale copy. An unhashed route outlives its bytes, so it gets a
+        // short window instead of being frozen for a month.
+        let cache_control = if self.hashed {
+            headers::CacheControl::new()
+                .with_max_age(Duration::from_hours(24 * 365))
+                .with_immutable()
+        } else {
+            headers::CacheControl::new().with_max_age(Duration::from_hours(1))
+        };
+
         let headers = (
             TypedHeader(headers::ContentType::from(self.mime.clone())),
-            TypedHeader(
-                headers::CacheControl::new()
-                    .with_max_age(Duration::from_hours(720))
-                    .with_immutable(),
-            ),
+            TypedHeader(cache_control),
         );
 
         (headers, self.content.clone()).into_response()
@@ -145,9 +157,39 @@ mod tests {
         let headers = response.headers();
 
         assert_eq!(headers.get(http::header::CONTENT_TYPE).unwrap(), "text/css");
+    }
+
+    /// A content-hashed route can never serve different bytes, so it may be pinned forever.
+    #[test]
+    fn hashed_assets_are_cached_indefinitely() {
+        let asset = Asset::new_hashed("style", Kind::Css, String::from("body {}").into_bytes());
+        let response = asset.into_response();
+
         assert_eq!(
-            headers.get(http::header::CACHE_CONTROL).unwrap(),
-            "immutable, max-age=2592000"
+            response.headers().get(http::header::CACHE_CONTROL).unwrap(),
+            "immutable, max-age=31536000"
         );
+    }
+
+    /// An unhashed route keeps serving the same URL after its content changes, so pinning it
+    /// would strand the stale copy in every client that fetched it.
+    #[test]
+    fn unhashed_assets_are_revalidated() {
+        let asset = Asset::new("favicon.png", mime::IMAGE_PNG, vec![0]);
+        let response = asset.into_response();
+
+        let cache_control = response
+            .headers()
+            .get(http::header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        assert!(
+            !cache_control.contains("immutable"),
+            "got: {cache_control}"
+        );
+        assert_eq!(cache_control, "max-age=3600");
     }
 }
