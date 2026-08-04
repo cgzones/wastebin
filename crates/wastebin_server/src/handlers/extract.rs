@@ -1,4 +1,5 @@
 use std::convert::Infallible;
+use std::str::FromStr;
 
 use axum::extract::{
     Form, FromRef, FromRequest, FromRequestParts, OptionalFromRequest, OptionalFromRequestParts,
@@ -207,14 +208,6 @@ where
     }
 }
 
-/// Strip a trailing `:port` from an authority, leaving an IPv6 literal's brackets intact.
-fn host_of(authority: &str) -> &str {
-    match authority.rfind(']') {
-        Some(end) => &authority[..=end],
-        None => authority.split(':').next().unwrap_or(authority),
-    }
-}
-
 impl RequestOrigin {
     /// Whether a browser marked this request as coming from another site.
     ///
@@ -236,10 +229,17 @@ impl RequestOrigin {
             return true;
         };
 
-        let addressed = self.host.as_deref().map(host_of);
+        // `Authority` drops the port and keeps an IPv6 literal's brackets, which is the spelling
+        // `Url::host_str` produces on the other side of the comparison. A `Host` it cannot parse
+        // names nothing, so only the configured base URL can still match.
+        let addressed = self
+            .host
+            .as_deref()
+            .and_then(|host| http::uri::Authority::from_str(host).ok());
         let configured = base_url.host_str();
 
-        addressed != Some(origin_host.as_str()) && configured != Some(origin_host.as_str())
+        addressed.as_ref().map(http::uri::Authority::host) != Some(origin_host.as_str())
+            && configured != Some(origin_host.as_str())
     }
 }
 
