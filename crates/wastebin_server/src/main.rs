@@ -267,6 +267,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let cache_size = env::cache_size()?;
+    let cache_max_bytes = env::cache_max_bytes()?;
     let method = env::database_method()?;
     let key = env::signing_key()?;
     let socket_type = env::socket_type()?;
@@ -281,7 +282,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let max_expiration = env::max_expiration()?;
     env::validate_expirations(&expirations, max_expiration)?;
 
-    let cache = Cache::new(cache_size)?;
+    let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
+    let cache = Cache::new(cache_size, cache_max_bytes, Arc::clone(&highlighter))?;
     let (db, db_handler) = Database::new(method, core_env::password_hash_salt()?)?;
 
     tracing::debug!("serving on {socket_type}");
@@ -304,7 +306,6 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         max_body_size,
         max_expiration,
     ));
-    let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
     let ratelimit_insert = ratelimit_insert.map(make_ratelimiter);
     let ratelimit_delete = ratelimit_delete.map(make_ratelimiter);
     let state = AppState {

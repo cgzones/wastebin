@@ -36,7 +36,13 @@ impl Client {
         let (db, handler) =
             Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
                 .expect("open memory database");
-        let cache = Cache::new(NonZeroUsize::new(128)).unwrap();
+        let highlighter = Arc::new(Highlighter::default());
+        let cache = Cache::new(
+            NonZeroUsize::new(128),
+            64 * 1024 * 1024,
+            Arc::clone(&highlighter),
+        )
+        .unwrap();
         let key = Key::generate();
         let expirations = "0".parse::<ExpirationSet>().unwrap();
         let page = Arc::new(page::Page::new(
@@ -52,7 +58,7 @@ impl Client {
             cache,
             key,
             page,
-            highlighter: Arc::new(Highlighter::default()),
+            highlighter,
             renderer: crate::render::Renderer::with_available_parallelism(),
             ratelimit_insert: Some(Arc::new(
                 Ratelimiter::builder(60)
