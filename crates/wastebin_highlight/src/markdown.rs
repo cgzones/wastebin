@@ -136,7 +136,18 @@ pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
         return Err(Error::TooDeeplyNested(MAX_NESTING_DEPTH));
     }
 
-    let cleaned = SANITIZER.clean(&raw).to_string();
+    let document = SANITIZER.clean(&raw);
+
+    // `Document`'s `Display` serialises into an unreserved `Vec`, turns that into a `String`, and
+    // then copies it a second time into the destination. Serialising here instead reserves once
+    // and keeps the buffer it filled. Neither failure below is reachable — a `Vec` sink cannot
+    // fail to be written to, and html5ever only emits UTF-8 — so they fall back to that `Display`
+    // rather than introducing an error variant nothing can produce.
+    let mut serialized = Vec::with_capacity(raw.len());
+    let cleaned = match document.write_to(&mut serialized) {
+        Ok(()) => String::from_utf8(serialized).unwrap_or_else(|_| document.to_string()),
+        Err(_) => document.to_string(),
+    };
 
     // After the sanitizer, not before: it escapes `<` and `>` inside attribute values, so a tag is
     // exactly what it looks like and the marker cannot land inside one. Its own markup is this
