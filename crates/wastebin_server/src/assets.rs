@@ -74,6 +74,16 @@ impl Asset {
         }
     }
 
+    /// Serve the same bytes under a second, unhashed route.
+    #[must_use]
+    pub fn aliased(&self, name: &str) -> Self {
+        Self {
+            route: format!("/{name}"),
+            hashed: false,
+            ..self.clone()
+        }
+    }
+
     #[must_use]
     pub fn route(&self) -> &str {
         &self.route

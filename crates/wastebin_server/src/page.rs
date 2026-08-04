@@ -9,6 +9,10 @@ use wastebin_highlight::Theme;
 /// Static page assets.
 pub(crate) struct Assets {
     pub favicon: Asset,
+    /// The same icon under the well-known path. Browsers follow the `<link rel="icon">` to
+    /// `favicon.png`, but link unfurlers and feed readers still probe `/favicon.ico` blindly, and
+    /// an error page is a poor answer for them.
+    pub favicon_ico: Asset,
     pub css: Css,
     pub index_js: Asset,
     pub paste_js: Asset,
@@ -78,12 +82,17 @@ impl Assets {
     /// Create page [`Assets`] for the given `theme`.
     #[must_use]
     fn new(theme: Theme) -> Self {
+        let favicon = Asset::new(
+            "favicon.png",
+            mime::IMAGE_PNG,
+            include_bytes!("../../../assets/favicon.png").to_vec(),
+        );
+
         Self {
-            favicon: Asset::new(
-                "favicon.ico",
-                mime::IMAGE_PNG,
-                include_bytes!("../../../assets/favicon.png").to_vec(),
-            ),
+            // Both routes serve the same bytes; `Asset` holds them in `Bytes`, so this shares
+            // rather than copies them.
+            favicon_ico: favicon.aliased("favicon.ico"),
+            favicon,
             css: Css::new(theme),
             index_js: Asset::new_hashed(
                 "index",
@@ -112,6 +121,7 @@ impl Assets {
     pub fn iter(&self) -> impl Iterator<Item = &Asset> {
         [
             &self.favicon,
+            &self.favicon_ico,
             &self.index_js,
             &self.paste_js,
             &self.burn_js,

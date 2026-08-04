@@ -510,6 +510,31 @@ mod tests {
         Ok(())
     }
 
+    /// The `<link rel="icon">` points at the PNG, but `/favicon.ico` is probed blindly by link
+    /// unfurlers and feed readers — and `/{id}` would otherwise answer them with an error page.
+    #[tokio::test]
+    async fn the_icon_is_served_under_both_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let png = client.get("/favicon.png").send().await?;
+        assert_eq!(png.status(), http::StatusCode::OK);
+        assert_eq!(
+            png.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            "image/png"
+        );
+        let png = png.bytes().await?;
+
+        let ico = client.get("/favicon.ico").send().await?;
+        assert_eq!(ico.status(), http::StatusCode::OK);
+        assert_eq!(ico.bytes().await?, png);
+
+        // The page itself references the honestly-named one.
+        let body = client.get("/").send().await?.text().await?;
+        assert!(body.contains(r#"href="/favicon.png""#), "body: {body}");
+
+        Ok(())
+    }
+
     /// `OPTIONS` is defined to report what a resource accepts, not to be refused by it.
     #[tokio::test]
     async fn options_reports_the_allowed_methods() -> Result<(), Box<dyn std::error::Error>> {
