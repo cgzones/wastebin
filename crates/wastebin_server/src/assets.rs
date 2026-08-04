@@ -28,12 +28,6 @@ pub(crate) enum Kind {
     Js,
 }
 
-impl IntoResponse for Asset {
-    fn into_response(self) -> Response {
-        self.response()
-    }
-}
-
 impl Asset {
     /// Construct new asset under the given `name`, `mime` type and `content`.
     #[must_use]
@@ -168,7 +162,7 @@ mod tests {
             String::from("body {}").into_bytes(),
         );
 
-        let response = asset.into_response();
+        let response = asset.response();
         let headers = response.headers();
 
         assert_eq!(headers.get(http::header::CONTENT_TYPE).unwrap(), "text/css");
@@ -183,7 +177,7 @@ mod tests {
             (Kind::Js, "text/javascript; charset=utf-8"),
         ] {
             let asset = Asset::new_hashed("a", kind, String::from("/* ä */").into_bytes());
-            let response = asset.into_response();
+            let response = asset.response();
 
             assert_eq!(
                 response.headers().get(http::header::CONTENT_TYPE).unwrap(),
@@ -196,7 +190,7 @@ mod tests {
     #[test]
     fn hashed_assets_are_cached_indefinitely() {
         let asset = Asset::new_hashed("style", Kind::Css, String::from("body {}").into_bytes());
-        let response = asset.into_response();
+        let response = asset.response();
 
         assert_eq!(
             response.headers().get(http::header::CACHE_CONTROL).unwrap(),
@@ -209,7 +203,7 @@ mod tests {
     #[test]
     fn unhashed_assets_are_revalidated() {
         let asset = Asset::new("favicon.png", mime::IMAGE_PNG, vec![0]);
-        let response = asset.into_response();
+        let response = asset.response();
 
         let cache_control = response
             .headers()
