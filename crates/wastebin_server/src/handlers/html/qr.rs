@@ -315,6 +315,7 @@ mod tests {
                 format!(r#"href="/dl{path}""#),
                 format!(r#"href="/raw{path}""#),
                 String::from("<kbd>d</kbd>"),
+                String::from("<kbd>r</kbd>"),
             ] {
                 assert_eq!(
                     body.contains(&offered),
