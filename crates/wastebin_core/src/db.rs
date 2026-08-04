@@ -242,8 +242,6 @@ pub mod read {
         pub metadata: Metadata,
         /// Entry is expired
         pub expired: bool,
-        /// Entry must be deleted
-        pub must_be_deleted: bool,
         /// Nonce for this entry
         pub nonce: Option<XNonce>,
     }
@@ -255,19 +253,6 @@ pub mod read {
         data: Vec<u8>,
         /// Metadata
         metadata: Metadata,
-        /// Entry must be deleted
-        must_be_deleted: bool,
-    }
-
-    /// Uncompressed entry
-    #[derive(Debug)]
-    pub struct UncompressedEntry {
-        /// Content
-        pub text: String,
-        /// Metadata
-        pub metadata: Metadata,
-        /// Entry must be deleted
-        pub must_be_deleted: bool,
     }
 
     /// Uncompressed, decrypted data read from the database.
@@ -326,7 +311,6 @@ pub mod read {
                 (None, None | Some(_)) => Ok(CompressedReadEntry {
                     data: self.data,
                     metadata: self.metadata,
-                    must_be_deleted: self.must_be_deleted,
                 }),
                 (Some(nonce), Some(password)) => {
                     let encrypted = Encrypted::new(self.data, nonce);
@@ -334,7 +318,6 @@ pub mod read {
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
-                        must_be_deleted: self.must_be_deleted,
                     })
                 }
             }
@@ -342,7 +325,7 @@ pub mod read {
     }
 
     impl CompressedReadEntry {
-        pub async fn decompress(self) -> Result<UncompressedEntry, Error> {
+        pub async fn decompress(self) -> Result<Data, Error> {
             let mut decoder = ZstdDecoder::new(Cursor::new(self.data));
             let mut text = String::new();
 
@@ -351,10 +334,9 @@ pub mod read {
                 .await
                 .map_err(|e| Error::Compression(e.to_string()))?;
 
-            Ok(UncompressedEntry {
+            Ok(Data {
                 text,
                 metadata: self.metadata,
-                must_be_deleted: self.must_be_deleted,
             })
         }
     }
@@ -532,7 +514,6 @@ impl Handler {
 
                 Ok(read::DatabaseEntry {
                     data: row.get(5)?,
-                    must_be_deleted: metadata.must_be_deleted,
                     metadata,
                     nonce,
                     expired,
@@ -665,15 +646,9 @@ impl Database {
             return Err(Error::NotFound);
         }
 
-        let read::UncompressedEntry {
-            text,
-            metadata,
-            must_be_deleted,
-        } = entry.decrypt(password).await?.decompress().await?;
+        let data = entry.decrypt(password).await?.decompress().await?;
 
-        let data = read::Data { text, metadata };
-
-        if must_be_deleted {
+        if data.metadata.must_be_deleted {
             self.delete(id).await?;
             return Ok(read::Entry::Burned(data));
         }
