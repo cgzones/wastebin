@@ -7,7 +7,7 @@ use axum::extract::{Form, Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
-use crate::handlers::extract::{Theme, Uids, can_delete};
+use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasswordForm;
 use crate::handlers::html::{ErrorResponse, make_error, password_input};
 use crate::i18n::Lang;
@@ -46,6 +46,7 @@ pub async fn get(
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
     form: Result<Form<PasswordForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
@@ -111,7 +112,7 @@ pub async fn get(
         Ok(rendered.into_response())
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 #[cfg(test)]

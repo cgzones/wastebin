@@ -54,6 +54,17 @@ pub(crate) struct RequestOrigin {
     host: Option<String>,
 }
 
+/// Which representation the client wants back when a request fails.
+///
+/// Only an explicit preference for `application/json` switches away from HTML, so a browser, a
+/// bare `curl` and anything sending `*/*` keep getting the rendered page.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Accepts {
+    #[default]
+    Html,
+    Json,
+}
+
 /// Uid cookie value extractor, extracted from the `uid` cookie.
 ///
 /// The cookie holds a comma-separated list of i64 values: index 0 is the client's
@@ -342,6 +353,66 @@ where
     }
 }
 
+/// Read the `q=` weight of an `Accept`-style entry's parameters, defaulting to `1.0`.
+fn quality(parts: std::str::Split<'_, char>) -> f32 {
+    parts
+        .filter_map(|part| {
+            let part = part.trim();
+            part.strip_prefix("q=").or_else(|| part.strip_prefix("Q="))
+        })
+        .find_map(|value| value.parse::<f32>().ok())
+        .unwrap_or(1.0)
+}
+
+/// Pick the representation an `Accept` header asks for, honoring `q=` weights.
+///
+/// Media ranges other than the two concrete types are ignored, so `*/*` — what a bare `curl`
+/// and many libraries send — leaves the HTML default in place rather than being read as a
+/// preference either way.
+fn accepts_from_header(header: &str) -> Accepts {
+    header
+        .split(',')
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let mut parts = entry.split(';');
+            let media = parts.next().map(str::trim)?;
+
+            let accepts = if media.eq_ignore_ascii_case("application/json") {
+                Accepts::Json
+            } else if media.eq_ignore_ascii_case("text/html") {
+                Accepts::Html
+            } else {
+                return None;
+            };
+
+            // Position breaks ties so the first listed entry wins at equal weight.
+            #[expect(clippy::cast_precision_loss)]
+            let weighted = quality(parts) - (idx as f32) * 1e-6;
+
+            Some((weighted, accepts))
+        })
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map_or(Accepts::default(), |(_, accepts)| accepts)
+}
+
+impl<S> FromRequestParts<S> for Accepts
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
+        std::future::ready(Ok(parts
+            .headers
+            .get(http::header::ACCEPT)
+            .and_then(|value| value.to_str().ok())
+            .map_or_else(Accepts::default, accepts_from_header)))
+    }
+}
+
 /// Map a single language tag (e.g. `en`, `de-AT`) to a supported [`Lang`].
 fn lang_from_tag(tag: &str) -> Option<Lang> {
     const TAGS: [(&str, Lang); 3] = [("en", Lang::En), ("de", Lang::De), ("zh", Lang::Zh)];
@@ -475,6 +546,30 @@ mod tests {
     #[test]
     fn handles_region_subtags() {
         assert_eq!(lang_from_accept_language("de-AT"), Lang::De);
+    }
+
+    #[test]
+    fn accept_header_selects_the_representation() {
+        assert_eq!(accepts_from_header("application/json"), Accepts::Json);
+        assert_eq!(accepts_from_header("text/html"), Accepts::Html);
+
+        // A browser listing both prefers HTML by weight.
+        assert_eq!(
+            accepts_from_header("text/html,application/xhtml+xml,application/json;q=0.9"),
+            Accepts::Html
+        );
+        assert_eq!(
+            accepts_from_header("text/html;q=0.2,application/json;q=0.9"),
+            Accepts::Json
+        );
+    }
+
+    /// `*/*` states no preference, so it must not be read as one.
+    #[test]
+    fn wildcard_accept_keeps_the_html_default() {
+        assert_eq!(accepts_from_header("*/*"), Accepts::Html);
+        assert_eq!(accepts_from_header("text/plain"), Accepts::Html);
+        assert_eq!(accepts_from_header(""), Accepts::Html);
     }
 
     #[test]

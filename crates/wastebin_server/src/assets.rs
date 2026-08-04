@@ -209,10 +209,7 @@ mod tests {
             .unwrap()
             .to_owned();
 
-        assert!(
-            !cache_control.contains("immutable"),
-            "got: {cache_control}"
-        );
+        assert!(!cache_control.contains("immutable"), "got: {cache_control}");
         assert_eq!(cache_control, "max-age=3600");
     }
 }

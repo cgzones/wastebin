@@ -4,7 +4,7 @@ use axum::extract::{Path, State};
 
 use crate::Page;
 use crate::cache::Key;
-use crate::handlers::extract::Theme;
+use crate::handlers::extract::{Accepts, Theme};
 use crate::handlers::html::qr::{code_for, dark_modules};
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
@@ -15,6 +15,7 @@ pub async fn get(
     State(page): State<Page>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
 ) -> Result<Burn, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
@@ -29,7 +30,7 @@ pub async fn get(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 /// Burn page shown if "burn-after-reading" was selected during insertion.

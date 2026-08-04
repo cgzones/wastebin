@@ -5,7 +5,7 @@ use qrcodegen::QrCode;
 use url::Url;
 
 use crate::cache::Key;
-use crate::handlers::extract::{Theme, Uids, can_delete};
+use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
 use crate::{Error, Highlighter, Page};
@@ -14,6 +14,7 @@ use wastebin_core::db::read::Metadata;
 use wastebin_core::expiration::Expiration;
 
 /// GET handler for a QR page.
+#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(page): State<Page>,
@@ -22,6 +23,7 @@ pub async fn get(
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
 ) -> Result<Qr, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
@@ -48,7 +50,7 @@ pub async fn get(
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang, accepts))
 }
 
 /// Paste view showing the formatted paste as well as a bunch of links.

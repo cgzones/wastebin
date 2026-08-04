@@ -10,7 +10,7 @@ use axum_extra::extract::cookie::Key as CookieKey;
 use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
-use crate::handlers::extract::{Theme, Uids, can_delete, verify_owner_token};
+use crate::handlers::extract::{Accepts, Theme, Uids, can_delete, verify_owner_token};
 use crate::handlers::html::{BurnConfirmation, ErrorResponse, make_error, password_input};
 use crate::handlers::uid_cookie;
 use crate::i18n::Lang;
@@ -71,6 +71,7 @@ pub async fn get(
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
+    accepts: Accepts,
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     let cache = &appstate.cache;
@@ -94,7 +95,7 @@ pub async fn get(
             let own_uid = db
                 .next_uid()
                 .await
-                .map_err(|err| make_error(err.into(), page.clone(), theme, lang))?;
+                .map_err(|err| make_error(err.into(), page.clone(), theme, lang, accepts))?;
             new_uids.push(own_uid);
         }
 
@@ -105,7 +106,7 @@ pub async fn get(
         // steer the `Location` header off-site.
         let key: Key = id
             .parse()
-            .map_err(|err| make_error(err, page.clone(), theme, lang))?;
+            .map_err(|err| make_error(err, page.clone(), theme, lang, accepts))?;
         let cookie = uid_cookie(&new_uids);
         return Ok((jar.add(cookie), Redirect::to(&format!("/{key}"))).into_response());
     }
@@ -192,7 +193,7 @@ pub async fn get(
         Ok(paste.into_response())
     }
     .await
-    .map_err(|err| make_error(err, appstate.page, theme, lang))
+    .map_err(|err| make_error(err, appstate.page, theme, lang, accepts))
 }
 
 #[cfg(test)]
