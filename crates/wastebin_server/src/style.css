@@ -1004,6 +1004,17 @@ textarea:focus-visible {
   outline: none;
 }
 
+/* Sanitising keeps `class` so that highlighted code blocks survive, which also lets a paste name
+   one of the site's own chrome classes. `.toast` alone is `position: fixed` at `z-index: 1000` —
+   enough to pin "Session expired, sign in again" over the page as a link to anywhere. Nothing a
+   paste renders may leave the article's flow, so a borrowed class draws an inert box inside the
+   document instead of a prompt floating above it. `style` is already stripped, so this is the only
+   way paste markup can position anything. */
+.markdown-body [class] {
+  position: static;
+  z-index: auto;
+}
+
 .markdown-body {
   max-width: 78ch;
   margin: 0 auto;

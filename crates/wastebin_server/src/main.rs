@@ -944,6 +944,29 @@ mod tests {
         }
     }
 
+    /// Sanitising keeps `class` so highlighted code blocks survive, so a paste may name any of the
+    /// site's own chrome classes — and `.toast` is `position: fixed` at `z-index: 1000`, enough to
+    /// float a fake "session expired" prompt over the page. The stylesheet is what keeps rendered
+    /// paste markup inside the article; there is no JS runtime here to assert it against a DOM.
+    #[test]
+    fn rendered_markdown_cannot_leave_the_article_flow() {
+        let css = include_str!("style.css");
+
+        let (_, containment) = css
+            .split_once(".markdown-body [class] {")
+            .expect("rendered markdown must neutralise positioning on classed descendants");
+        let (containment, _) = containment.split_once('}').expect("unterminated rule");
+
+        assert!(
+            containment.contains("position: static"),
+            "borrowed chrome could still be lifted out of the flow: {containment}"
+        );
+        assert!(
+            containment.contains("z-index: auto"),
+            "borrowed chrome could still be stacked over the page: {containment}"
+        );
+    }
+
     #[tokio::test]
     async fn cross_origin_isolation_headers() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
