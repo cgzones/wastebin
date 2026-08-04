@@ -105,6 +105,7 @@ impl Client {
             expirations,
             1024 * 1024,
             None,
+            &highlighter,
         ));
         let state = crate::AppState {
             db: db.clone(),
