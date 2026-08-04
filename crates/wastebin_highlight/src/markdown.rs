@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::LazyLock;
 
 use ammonia::Builder;
@@ -149,7 +150,12 @@ pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
         return Err(Error::TooLarge(MAX_RENDERED_BYTES));
     }
 
-    Ok(Html::new(marked.into_owned()))
+    // Nothing was marked in the overwhelmingly common case, so hand back the sanitizer's own
+    // string rather than a copy of the whole document.
+    Ok(Html::new(match marked {
+        Cow::Owned(marked) => marked,
+        Cow::Borrowed(_) => cleaned,
+    }))
 }
 
 /// The parser's events with fenced code blocks replaced by highlighted HTML and GFM alert
