@@ -219,6 +219,19 @@ async fn handle_service_errors(
     html::make_error(error, page, theme, lang, accepts).into_response()
 }
 
+/// Fallback for a path no route matched.
+///
+/// Without one, axum answers a bare 404 with an empty body, which is the only failure on the site
+/// that does not look like the rest of it.
+async fn handle_not_found(
+    State(page): State<Page>,
+    theme: Theme,
+    lang: Lang,
+    accepts: Accepts,
+) -> Response {
+    html::make_error(Error::RouteNotFound, page, theme, lang, accepts).into_response()
+}
+
 /// Build a rate limiter refilling `per_second` tokens every second.
 fn make_ratelimiter(per_second: std::num::NonZeroU32) -> Arc<Ratelimiter> {
     let value = per_second.get().into();
@@ -290,6 +303,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .route("/dl/{id}", get(download::get))
         .route("/raw/{id}", get(raw::get))
         .route("/delete/{id}", post(delete::form::delete))
+        .fallback(handle_not_found)
         .layer(
             ServiceBuilder::new()
                 .layer(DefaultBodyLimit::max(max_body_size))
@@ -451,6 +465,46 @@ mod tests {
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
         }
+
+        Ok(())
+    }
+
+    /// An unmatched path used to answer with an empty-bodied 404, the one failure on the site
+    /// that did not look like the rest of it.
+    #[tokio::test]
+    async fn unknown_route_renders_the_error_page() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.get("/no/such/path").send().await?;
+        assert_eq!(res.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            res.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+
+        let body = res.text().await?;
+        assert!(body.contains("<!DOCTYPE html>"), "body: {body}");
+        assert!(body.contains("does not exist"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// The fallback negotiates like every other failure.
+    #[tokio::test]
+    async fn unknown_route_answers_json_clients() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .get("/no/such/path")
+            .header(http::header::ACCEPT, "application/json")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            res.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            "application/json"
+        );
 
         Ok(())
     }

@@ -38,6 +38,9 @@ pub(crate) enum Error {
     Abandoned,
     #[error("renderer is gone")]
     RendererGone,
+    /// No route matched the request path.
+    #[error("no such route")]
+    RouteNotFound,
 }
 
 impl Error {
@@ -48,7 +51,7 @@ impl Error {
     /// internals. Every variant maps to a fixed key instead; the detail goes to the log.
     pub(crate) fn message_key(&self) -> &'static str {
         match self {
-            Error::Database(db::Error::NotFound) => "error.not_found",
+            Error::Database(db::Error::NotFound) | Error::RouteNotFound => "error.not_found",
             Error::Database(db::Error::Delete) | Error::MissingUid => "error.forbidden",
             Error::CrossSite => "error.cross_site",
             Error::Database(db::Error::WrongPassword) => "error.wrong_password",
@@ -98,7 +101,7 @@ impl From<Error> for StatusCode {
 impl From<&Error> for StatusCode {
     fn from(err: &Error) -> Self {
         match err {
-            Error::Database(db::Error::NotFound) => StatusCode::NOT_FOUND,
+            Error::Database(db::Error::NotFound) | Error::RouteNotFound => StatusCode::NOT_FOUND,
             Error::Database(db::Error::Delete | db::Error::WrongPassword)
             | Error::MissingUid
             | Error::CrossSite => StatusCode::FORBIDDEN,
