@@ -13,7 +13,8 @@ A minimal pastebin with a design shamelessly copied from
 You are reading the documentation for an **unreleased version**. You can refer
 to released versions here:
 
-**[3.7.0](https://github.com/matze/wastebin/tree/ef77e45f3ae7f3d8ec1385f9f22527d10e1ec9aa)** •
+**[3.7.1](https://github.com/matze/wastebin/tree/a50c74abb1f59e043d1350420438251214d00f98)** •
+[3.7.0](https://github.com/matze/wastebin/tree/ef77e45f3ae7f3d8ec1385f9f22527d10e1ec9aa) •
 [3.6.2](https://github.com/matze/wastebin/tree/f9cb25a4d5b19fa938eef0af42f68f2835f17b98) •
 [3.5.0](https://github.com/matze/wastebin/tree/d379a6e3e73e6f1fcf23f93c9b0cc857f46acbce) •
 [3.4.1](https://github.com/matze/wastebin/tree/c9d717329a6e357e8a13a324bfa9a53d41ae9b35) •
@@ -110,12 +111,15 @@ Or install the provided `wastebin` package like you normally would.
 
 ### Build from source
 
-Install a Rust 2024 toolchain containing Rust 1.85 with
+Install a Rust 2024 toolchain containing Rust 1.95 with
 [rustup](https://rustup.rs) and run the server binary with
 
 ```bash
-cargo run --release
+cargo run --release --bin wastebin
 ```
+
+The workspace contains three binaries, so `--bin` is required to say which one
+to run; the others are `wastebin-ctl` and `wastebin-theme-showcase`.
 
 
 ### Build a container image
@@ -125,10 +129,10 @@ It is possible to build a container image using Docker or Podman. The
 
 ```bash
 # Docker
-docker build -t wastebin:v3.0.0 -f Dockerfile .
+docker build -t wastebin:latest -f Dockerfile .
 
 # Podman
-podman build -t wastebin:v3.0.0 -f Dockerfile .
+podman build -t wastebin:latest -f Dockerfile .
 ```
 
 To interact with a running wastebin instance the bundled `wastebin-ctl` tool can
@@ -172,7 +176,8 @@ Raw HTML inside the Markdown source is run through the
 `<details>`, `<summary>` or `<kbd>` are preserved while `<script>`, inline
 event handlers and `javascript:` URLs are stripped. To permit external images
 embedded via `![alt](https://…)`, the Content Security Policy is relaxed to
-`img-src *` for `/md/*` responses only; all other routes keep the strict
+`img-src 'self' https: data:` for `/md/*` responses only, so remote images load
+over TLS but never over plaintext HTTP; all other routes keep the strict
 default.
 
 
@@ -191,7 +196,7 @@ run-time behavior:
 | `WASTEBIN_HTTP_TIMEOUT`           | Maximum number of seconds a request is processed until wastebin responds with 408. | `5` |
 | `WASTEBIN_MAX_BODY_SIZE`          | Number of bytes to accept for POST requests.                  | `1048576`, i.e. 1 MB  |
 | `WASTEBIN_PASSWORD_SALT`          | Salt used to hash user passwords used for encrypting pastes. Must be at least 8 bytes long. | `somesalt`            |
-| `WASTEBIN_PASTE_EXPIRATIONS`      | Possible paste expirations as a comma-separated list of seconds or values with duration magnitudes (`s`, `m`, `h`, `d`, `M`, `y` for seconds, minutes, hours, days, months and years respectively). Appending `=d` to one of the value makes it the default selection. | see [here](https://github.com/matze/wastebin/blob/eb61c78506a165605f145e8374ed64822405eda0/crates/wastebin_server/src/env.rs#L166) |
+| `WASTEBIN_PASTE_EXPIRATIONS`      | Possible paste expirations as a comma-separated list of seconds or values with duration magnitudes (`s`, `m`, `h`, `d`, `w`, `M`, `y` for seconds, minutes, hours, days, weeks, months and years respectively). A `0` entry means "never". Appending `=d` to one of the values makes it the default selection. | `0=d,10m,1h,1d,1w,1M,1y` |
 | `WASTEBIN_PASTE_MAX_EXPIRATION`   | Longest expiration a paste may be created with, in the same format as a single `WASTEBIN_PASTE_EXPIRATIONS` value. | unlimited |
 | `WASTEBIN_SIGNING_KEY`            | Key to sign cookies. Must be at least 64 bytes long.          | Random key generated at startup, i.e. cookies will become invalid after restarts and paste creators will not be able to delete their pastes. |
 | `WASTEBIN_THEME`                  | Theme colors, one of `ayu`, `base16ocean`, `catppuccin`, `coldark`, `gruvbox`, `monokai`, `onehalf`, `solarized`. See [this page](https://matze.github.io/wastebin/) for a preview. | `ayu` |
