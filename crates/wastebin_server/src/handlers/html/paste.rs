@@ -61,11 +61,6 @@ pub(crate) struct Paste {
     is_markdown: bool,
 }
 
-/// Return `true` if `ext` identifies a Markdown paste.
-pub(crate) fn is_markdown_ext(ext: Option<&str>) -> bool {
-    ext.is_some_and(|ext| ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("markdown"))
-}
-
 #[expect(clippy::too_many_arguments)]
 pub async fn get(
     State(appstate): State<AppState>,
@@ -165,7 +160,7 @@ pub async fn get(
         let paste = Paste {
             page: page.clone(),
             can_delete: can_delete(uids.as_ref(), owner_uid),
-            is_markdown: is_markdown_ext(key.ext.as_deref()),
+            is_markdown: highlighter.is_markdown(key.ext.as_deref()),
             key,
             theme,
             lang,

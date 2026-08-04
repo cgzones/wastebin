@@ -2,7 +2,9 @@ use std::fmt::Write;
 use std::sync::Arc;
 
 use syntect::html::{ClassStyle, ClassedHTMLGenerator, line_tokens_to_classed_spans};
-use syntect::parsing::{BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxSet};
+use syntect::parsing::{
+    BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet,
+};
 use syntect::util::LinesWithEndings;
 
 #[expect(deprecated)]
@@ -17,6 +19,9 @@ pub enum Error {
 }
 
 const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
+
+/// Name syntect gives the Markdown syntax.
+const MARKDOWN_SYNTAX_NAME: &str = "Markdown";
 
 /// Rendered HTML, shared so that cloning is a refcount bump rather than a copy of the whole
 /// document.
@@ -183,16 +188,25 @@ fn line_tokens_to_classed_spans_md(
 }
 
 impl Highlighter {
+    /// Return the syntax `ext` resolves to, falling back to plain text.
+    fn syntax_for(&self, ext: Option<&str>) -> &SyntaxReference {
+        ext.filter(|ext| *ext != "txt")
+            .and_then(|ext| self.syntax_set.find_syntax_by_extension(ext))
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
+    }
+
+    /// Return `true` if `ext` resolves to the Markdown syntax, i.e. the paste can also be served
+    /// as rendered HTML.
+    #[must_use]
+    pub fn is_markdown(&self, ext: Option<&str>) -> bool {
+        self.syntax_for(ext).name == MARKDOWN_SYNTAX_NAME
+    }
+
     /// Highlight `text` with the given file extension which is used to
     /// determine the right syntax. If not given or does not exist, plain text will be generated.
     pub fn highlight(&self, text: String, ext: Option<String>) -> Result<Html, Error> {
-        let syntax_ref = ext
-            .as_deref()
-            .filter(|ext| *ext != "txt")
-            .and_then(|ext| self.syntax_set.find_syntax_by_extension(ext))
-            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
-
-        let is_markdown = syntax_ref.name == "Markdown";
+        let syntax_ref = self.syntax_for(ext.as_deref());
+        let is_markdown = syntax_ref.name == MARKDOWN_SYNTAX_NAME;
         let mut parse_state = ParseState::new(syntax_ref);
         let mut html = String::from(r#"<div id="line-numbers" aria-hidden="true">"#);
         let mut code = String::from(r#"<div class="src-code"><code>"#);
@@ -308,6 +322,27 @@ impl Html {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn markdown_detection_follows_the_syntax_set() {
+        let highlighter = Highlighter::default();
+
+        for ext in ["md", "markdown", "mdown"] {
+            assert!(
+                highlighter.is_markdown(Some(ext)),
+                "{ext} should be markdown"
+            );
+        }
+
+        for ext in ["rs", "txt", ""] {
+            assert!(
+                !highlighter.is_markdown(Some(ext)),
+                "{ext} should not be markdown"
+            );
+        }
+
+        assert!(!highlighter.is_markdown(None));
+    }
 
     #[test]
     fn markdown_links() -> Result<(), Box<dyn std::error::Error>> {
