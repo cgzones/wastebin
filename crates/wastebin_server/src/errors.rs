@@ -20,6 +20,10 @@ pub(crate) enum Error {
     Id(#[from] id::Error),
     #[error("malformed form data")]
     MalformedForm,
+    #[error("payload exceeded limit")]
+    PayloadTooLarge,
+    #[error("unsupported media type")]
+    UnsupportedMediaType,
     #[error("rate-limit hit")]
     RateLimit,
     #[error("expires too far in the future")]
@@ -47,6 +51,8 @@ impl From<Error> for StatusCode {
             | Error::UrlParsing(_)
             | Error::TooLongExpires => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
+            Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
+            Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::Join(_)
             | Error::QrCode(_)
             | Error::Database(_)

@@ -123,29 +123,13 @@ async fn handle_service_errors(
 ) -> Response {
     let response = next.run(req).await;
 
-    match response.status() {
-        StatusCode::PAYLOAD_TOO_LARGE => (
-            StatusCode::PAYLOAD_TOO_LARGE,
-            html::Error {
-                page,
-                theme,
-                lang,
-                description: String::from("payload exceeded limit"),
-            },
-        )
-            .into_response(),
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => (
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            html::Error {
-                page,
-                theme,
-                lang,
-                description: String::from("unsupported media type"),
-            },
-        )
-            .into_response(),
-        _ => response,
-    }
+    let error = match response.status() {
+        StatusCode::PAYLOAD_TOO_LARGE => Error::PayloadTooLarge,
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Error::UnsupportedMediaType,
+        _ => return response,
+    };
+
+    html::make_error(error, page, theme, lang).into_response()
 }
 
 /// Build a rate limiter refilling `per_second` tokens every second.
