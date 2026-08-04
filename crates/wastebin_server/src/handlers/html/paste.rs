@@ -131,7 +131,13 @@ pub async fn get(
             .and_then(|form| form.password.as_ref())
             .filter(|password| !password.is_empty())
             .map(|password| Password::from(password.as_bytes().to_vec()));
-        let confirmed = form.as_ref().and_then(|form| form.confirm_burn.as_deref()) == Some("1");
+        // Same reasoning as the password above: read from the query string, the confirmation is
+        // set by anything that merely follows a link, so an `<img>` or a prefetch burnt the paste.
+        let confirmed = form
+            .as_ref()
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
+            .and_then(|form| form.confirm_burn.as_deref())
+            == Some("1");
         let no_password = password.is_none();
 
         // This route is also every single-segment path no other route claimed, so a value that is
