@@ -11,7 +11,7 @@ use tokio::task::spawn_blocking;
 ///
 /// Those entries are already in databases, and their key depends on every value here, so this
 /// cannot change without making them unreadable.
-static LEGACY_CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
+static LEGACY_CONFIG: argon2::Config<'static> = argon2::Config {
     variant: argon2::Variant::Argon2i,
     version: argon2::Version::Version13,
     mem_cost: 65536,
@@ -21,13 +21,13 @@ static LEGACY_CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config
     secret: &[],
     ad: &[],
     hash_length: 32,
-});
+};
 
 /// Derivation for entries that carry their own salt.
 ///
 /// Argon2id rather than Argon2i: RFC 9106 §4 recommends it, and its hybrid addressing is what
 /// resists the tradeoff attacks that Argon2i's data-independent addressing invites.
-static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
+static CONFIG: argon2::Config<'static> = argon2::Config {
     variant: argon2::Variant::Argon2id,
     version: argon2::Version::Version13,
     mem_cost: 65536,
@@ -37,10 +37,10 @@ static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
     secret: &[],
     ad: &[],
     hash_length: 32,
-});
+};
 
 /// Bytes of salt minted for a new entry.
-pub const ENTRY_SALT_LEN: usize = 16;
+const ENTRY_SALT_LEN: usize = 16;
 
 /// Shortest salt argon2 accepts. A shorter one makes every key derivation fail, so it is rejected
 /// when the [`Salt`] is constructed rather than on the first encrypted paste.
@@ -60,8 +60,7 @@ static DERIVATION_LIMIT: LazyLock<usize> = LazyLock::new(|| {
         .get()
 });
 
-static DERIVATIONS: LazyLock<Arc<Semaphore>> =
-    LazyLock::new(|| Arc::new(Semaphore::new(*DERIVATION_LIMIT)));
+static DERIVATIONS: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(*DERIVATION_LIMIT));
 
 /// Encryption or decryption errors.
 #[derive(thiserror::Error, Debug)]
@@ -105,7 +104,7 @@ pub struct EntrySalt(Vec<u8>);
 /// against the whole database at once, and gave two pastes with the same password the same key.
 /// New entries carry their own; the ones already stored keep the derivation they were sealed with.
 #[derive(Clone)]
-pub enum Derivation {
+pub(crate) enum Derivation {
     /// An entry from before per-entry salts: the process-wide salt and the original variant.
     Legacy(Salt),
     /// An entry carrying a salt of its own.
@@ -128,30 +127,31 @@ impl EntrySalt {
     }
 }
 
+/// The single enforcement of [`MIN_SALT_LEN`], shared by both salt types.
+fn check_len(len: usize) -> Result<(), Error> {
+    if len < MIN_SALT_LEN {
+        return Err(Error::SaltTooShort(len));
+    }
+
+    Ok(())
+}
+
 impl TryFrom<Vec<u8>> for EntrySalt {
     type Error = Error;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Error> {
-        if value.len() < MIN_SALT_LEN {
-            return Err(Error::SaltTooShort(value.len()));
-        }
+        check_len(value.len())?;
 
         Ok(Self(value))
     }
 }
 
 impl Derivation {
-    fn config(&self) -> &'static argon2::Config<'static> {
+    /// The salt to derive under and the argon2 configuration it was sealed with.
+    fn params(&self) -> (&[u8], &'static argon2::Config<'static>) {
         match self {
-            Self::Legacy(_) => &LEGACY_CONFIG,
-            Self::PerEntry(_) => &CONFIG,
-        }
-    }
-
-    fn salt_bytes(&self) -> &[u8] {
-        match self {
-            Self::Legacy(salt) => salt.0.as_bytes(),
-            Self::PerEntry(salt) => salt.as_bytes(),
+            Self::Legacy(salt) => (salt.0.as_bytes(), &LEGACY_CONFIG),
+            Self::PerEntry(salt) => (salt.as_bytes(), &CONFIG),
         }
     }
 }
@@ -166,9 +166,7 @@ impl TryFrom<String> for Salt {
     type Error = Error;
 
     fn try_from(value: String) -> Result<Self, Error> {
-        if value.len() < MIN_SALT_LEN {
-            return Err(Error::SaltTooShort(value.len()));
-        }
+        check_len(value.len())?;
 
         Ok(Self(Arc::from(value)))
     }
@@ -181,18 +179,20 @@ impl From<Vec<u8>> for Plaintext {
 }
 
 fn cipher_from(password: &[u8], derivation: &Derivation) -> Result<XChaCha20Poly1305, Error> {
-    let key = argon2::hash_raw(password, derivation.salt_bytes(), derivation.config())?;
+    let (salt, config) = derivation.params();
+    let key = argon2::hash_raw(password, salt, config)?;
     let key = Key::try_from(key.as_slice()).map_err(|_| Error::ChaCha20Poly1305Encrypt)?;
     Ok(XChaCha20Poly1305::new(&key))
 }
 
 /// Wait for a key-derivation slot.
 ///
-/// The permit is owned so it can move into the blocking closure and cover the derivation itself:
-/// a caller that goes away must not release the slot while its work is still running.
-async fn derivation_permit() -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
-    Arc::clone(&DERIVATIONS)
-        .acquire_owned()
+/// The limiter is a `static`, so the permit borrows for `'static` and can move into the blocking
+/// closure to cover the derivation itself: a caller that goes away must not release the slot while
+/// its work is still running.
+async fn derivation_permit() -> Result<tokio::sync::SemaphorePermit<'static>, Error> {
+    DERIVATIONS
+        .acquire()
         .await
         .map_err(|_| Error::DerivationLimiterGone)
 }
