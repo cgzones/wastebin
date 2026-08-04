@@ -97,7 +97,17 @@ pub struct Highlighter {
     syntax_set: SyntaxSet,
     /// Indices into `syntax_set.syntaxes()`, ordered by lower-cased syntax name.
     ordered_syntaxes: Vec<usize>,
+    /// Where the plain-text syntax sits, i.e. what every unresolved extension falls back to.
+    plain_text: usize,
 }
+
+/// Which syntax an extension resolves to.
+///
+/// Opaque on purpose: what a caller may do with it is compare it to another, which is the only
+/// question the spelling of an extension does not answer. `md`, `markdown` and `mdown` name one
+/// syntax and so render one document, and so do the several hundred extensions that name none.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct SyntaxKey(usize);
 
 /// Syntax reference.
 pub struct Syntax<'a> {
@@ -114,9 +124,13 @@ impl Default for Highlighter {
         ordered_syntaxes
             .sort_by_cached_key(|&i| syntax_set.syntaxes().get(i).map(|s| s.name.to_lowercase()));
 
+        // Every set ships a plain-text syntax, so the fallback here is a formality.
+        let plain_text = index_of(&syntax_set, syntax_set.find_syntax_plain_text()).unwrap_or(0);
+
         Self {
             syntax_set,
             ordered_syntaxes,
+            plain_text,
         }
     }
 }
@@ -253,6 +267,17 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
         }
         s.push_str(atom_s);
     }
+}
+
+/// Position of `syntax` within `set`.
+///
+/// Derived from the reference syntect itself handed back rather than by repeating its lookup:
+/// extensions match case-insensitively and the last syntax listed wins, and a second spelling of
+/// those rules is a second thing to keep in step.
+fn index_of(set: &SyntaxSet, syntax: &SyntaxReference) -> Option<usize> {
+    set.syntaxes()
+        .iter()
+        .position(|candidate| std::ptr::eq(candidate, syntax))
 }
 
 /// Return `true` if `syntax` is the one Markdown resolves to.
@@ -408,20 +433,22 @@ impl Highlighter {
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
     }
 
-    /// Return `true` if `ext` selects a syntax of its own.
+    /// Return which syntax `ext` resolves to.
     ///
-    /// Extensions that do not are all rendered as plain text, so they produce identical output and
-    /// callers may treat them as interchangeable.
+    /// Two extensions with the same key render the same document, which is what lets a caller hold
+    /// one copy of it instead of one per spelling. Unknown extensions and `txt` all land on plain
+    /// text, so they share a key too.
     #[must_use]
-    pub fn knows_extension(&self, ext: &str) -> bool {
-        ext != "txt" && self.has_extension(ext)
+    pub fn syntax_key(&self, ext: Option<&str>) -> SyntaxKey {
+        let syntax = self.syntax_for(ext);
+
+        SyntaxKey(index_of(&self.syntax_set, syntax).unwrap_or(self.plain_text))
     }
 
     /// Return `true` if `ext` names any extension the syntax set lists.
     ///
-    /// Unlike [`Highlighter::knows_extension`], `txt` counts: that exclusion only serves callers
-    /// asking whether two extensions render alike, and `txt` is one of the values [`Self::syntaxes`]
-    /// offers, so rejecting it here would turn the site's own plain-text choice into an error.
+    /// `txt` counts: it is one of the values [`Self::syntaxes`] offers, so rejecting it here would
+    /// turn the site's own plain-text choice into an error.
     #[must_use]
     pub fn has_extension(&self, ext: &str) -> bool {
         self.syntax_set.find_syntax_by_extension(ext).is_some()
@@ -812,6 +839,27 @@ mod tests {
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
 
         Ok(())
+    }
+
+    /// The key answers "do these render the same document", which is what lets a caller hold one
+    /// copy rather than one per spelling.
+    #[test]
+    fn extensions_naming_one_syntax_share_a_key() {
+        let markdown = HIGHLIGHTER.syntax_key(Some("md"));
+        for ext in ["markdown", "mdown"] {
+            assert_eq!(HIGHLIGHTER.syntax_key(Some(ext)), markdown, "{ext}");
+        }
+
+        // Extensions naming no syntax all render as plain text, and so does `txt` and no extension
+        // at all — one key between them, however many spellings arrive.
+        let plain = HIGHLIGHTER.syntax_key(None);
+        for ext in ["txt", "zzz-not-a-syntax", "also-not-a-syntax"] {
+            assert_eq!(HIGHLIGHTER.syntax_key(Some(ext)), plain, "{ext}");
+        }
+
+        // Distinct syntaxes stay distinct, or the cache would serve one paste's render for another.
+        assert_ne!(HIGHLIGHTER.syntax_key(Some("rs")), markdown);
+        assert_ne!(HIGHLIGHTER.syntax_key(Some("rs")), plain);
     }
 
     #[test]

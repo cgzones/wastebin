@@ -255,7 +255,7 @@ mod tests {
     }
 
     /// Every value the language picker offers must survive the check above — `txt` in particular,
-    /// which `Highlighter::knows_extension` deliberately excludes for unrelated reasons.
+    /// which names the plain-text syntax and so must not be taken for an extension naming none.
     #[tokio::test]
     async fn offered_extensions_are_accepted() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
