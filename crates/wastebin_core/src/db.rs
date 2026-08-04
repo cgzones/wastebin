@@ -64,6 +64,11 @@ macro_rules! metadata_columns {
     };
 }
 
+/// Hand `value` back to the caller that issued the command.
+fn reply<T>(result: oneshot::Sender<T>, value: T) -> Result<(), Error> {
+    result.send(value).map_err(|_| Error::ResultSendError)
+}
+
 /// Parse the leading metadata columns of a row into [`Metadata`] plus whether the entry expired.
 fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, bool)> {
     let expiration = row
@@ -427,51 +432,17 @@ impl Handler {
             };
 
             match command {
-                Command::Insert { entry, result } => {
-                    result
-                        .send(self.insert(entry))
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::Get { id, result } => {
-                    result
-                        .send(self.get(id))
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::GetMetadata { id, result } => {
-                    result
-                        .send(self.get_metadata(id))
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::Delete { id, result } => {
-                    result
-                        .send(self.delete(id))
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::DeleteMany { ids, result } => {
-                    result
-                        .send(self.delete_many(ids))
-                        .map_err(|_| Error::ResultSendError)?;
-                }
+                Command::Insert { entry, result } => reply(result, self.insert(entry))?,
+                Command::Get { id, result } => reply(result, self.get(id))?,
+                Command::GetMetadata { id, result } => reply(result, self.get_metadata(id))?,
+                Command::Delete { id, result } => reply(result, self.delete(id))?,
+                Command::DeleteMany { ids, result } => reply(result, self.delete_many(ids))?,
                 Command::DeleteFor { id, uids, result } => {
-                    result
-                        .send(self.delete_for(id, &uids))
-                        .map_err(|_| Error::ResultSendError)?;
+                    reply(result, self.delete_for(id, &uids))?;
                 }
-                Command::NextUid { result } => {
-                    result
-                        .send(self.next_uid())
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::List { result } => {
-                    result
-                        .send(self.list())
-                        .map_err(|_| Error::ResultSendError)?;
-                }
-                Command::Purge { result } => {
-                    result
-                        .send(self.purge())
-                        .map_err(|_| Error::ResultSendError)?;
-                }
+                Command::NextUid { result } => reply(result, self.next_uid())?,
+                Command::List { result } => reply(result, self.list())?,
+                Command::Purge { result } => reply(result, self.purge())?,
             }
         }
     }
@@ -668,29 +639,31 @@ impl Database {
         Ok((Self { sender }, fut))
     }
 
-    /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
-    /// Returns the id of the new entry on success.
-    pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
-        let entry = entry.compress().await?.encrypt().await?;
-
+    /// Send `command` to the [`Handler`] and await its response.
+    async fn call<T>(
+        &self,
+        command: impl FnOnce(oneshot::Sender<Result<T, Error>>) -> Command,
+    ) -> Result<T, Error> {
         let (result, command_result) = oneshot::channel();
         self.sender
-            .send(Command::Insert { entry, result })
+            .send(command(result))
             .await
             .map_err(|_| Error::SendError)?;
 
         command_result.await?
     }
 
+    /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
+    /// Returns the id of the new entry on success.
+    pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
+        let entry = entry.compress().await?.encrypt().await?;
+
+        self.call(|result| Command::Insert { entry, result }).await
+    }
+
     /// Get entire entry for `id`.
     pub async fn get(&self, id: Id, password: Option<Password>) -> Result<read::Entry, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::Get { id, result })
-            .await
-            .map_err(|_| Error::SendError)?;
-
-        let entry = command_result.await??;
+        let entry = self.call(|result| Command::Get { id, result }).await?;
 
         if entry.expired {
             self.delete(id).await?;
@@ -718,13 +691,9 @@ impl Database {
     /// Expired entries are deleted and reported as [`Error::NotFound`], matching [`Self::get`],
     /// so callers can rely on metadata alone to decide a paste is still servable.
     pub async fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::GetMetadata { id, result })
-            .await
-            .map_err(|_| Error::SendError)?;
-
-        let (metadata, expired) = command_result.await??;
+        let (metadata, expired) = self
+            .call(|result| Command::GetMetadata { id, result })
+            .await?;
 
         if expired {
             self.delete(id).await?;
@@ -736,66 +705,38 @@ impl Database {
 
     /// Delete paste with `id`.
     async fn delete(&self, id: Id) -> Result<(), Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::Delete { id, result })
-            .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
+        self.call(|result| Command::Delete { id, result }).await
     }
 
     /// Delete pastes with `ids`.
     pub async fn delete_many(&self, ids: Vec<Id>) -> Result<usize, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::DeleteMany { ids, result })
+        self.call(|result| Command::DeleteMany { ids, result })
             .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
     }
 
     /// Delete paste with `id` if any of `uids` owns it.
     pub async fn delete_for(&self, id: Id, uids: &[i64]) -> Result<(), Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::DeleteFor {
-                id,
-                uids: uids.to_vec(),
-                result,
-            })
-            .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
+        self.call(|result| Command::DeleteFor {
+            id,
+            uids: uids.to_vec(),
+            result,
+        })
+        .await
     }
 
     /// Retrieve next monotonically increasing uid.
     pub async fn next_uid(&self) -> Result<i64, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::NextUid { result })
-            .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
+        self.call(|result| Command::NextUid { result }).await
     }
 
     /// List all entries.
     pub async fn list(&self) -> Result<Vec<ListEntry>, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::List { result })
-            .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
+        self.call(|result| Command::List { result }).await
     }
 
     /// Purge all expired entries and return their [`Id`]s
     pub async fn purge(&self) -> Result<Vec<Id>, Error> {
-        let (result, command_result) = oneshot::channel();
-        self.sender
-            .send(Command::Purge { result })
-            .await
-            .map_err(|_| Error::SendError)?;
-        command_result.await?
+        self.call(|result| Command::Purge { result }).await
     }
 }
 
