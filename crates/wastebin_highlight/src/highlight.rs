@@ -282,10 +282,18 @@ pub fn escape(s: &str, buf: &mut String) {
     buf.push_str(&s[last..]);
 }
 
-/// Transform `scope` atoms to CSS style classes and write output to `s`.
-fn scope_to_classes(s: &mut String, scope: Scope) {
+/// Transform `scope` atoms to CSS style classes and write output to `s`, reporting whether those
+/// atoms are the ones a Markdown link is rendered from.
+///
+/// Both answers come out of the same scope repository, which sits behind a process-wide lock: read
+/// separately, every scope push on the Markdown path took that lock twice to walk the same atoms
+/// twice. An empty scope names no link, and reports as one for the same reason `all` does — it has
+/// no atom that says otherwise.
+fn scope_to_classes(s: &mut String, scope: Scope) -> bool {
     #[expect(deprecated)]
     let repo = SCOPE_REPO.lock().expect("lock");
+    let mut is_link = true;
+
     for i in 0..(scope.len()) {
         let atom = scope.atom_at(i as usize);
         let atom_s = repo.atom_str(atom);
@@ -293,7 +301,11 @@ fn scope_to_classes(s: &mut String, scope: Scope) {
             s.push(' ');
         }
         s.push_str(atom_s);
+
+        is_link &= matches!(atom_s, "markup" | "underline" | "link" | "markdown");
     }
+
+    is_link
 }
 
 /// Position of `syntax` within `set`.
@@ -313,19 +325,6 @@ fn index_of(set: &SyntaxSet, syntax: &SyntaxReference) -> Option<usize> {
 /// without either of them spelling the name a second time.
 fn is_markdown_syntax(syntax: &SyntaxReference) -> bool {
     syntax.name == MARKDOWN_SYNTAX_NAME
-}
-
-/// Return `true` if `scope` will be used to render a Markdown link.
-fn is_markdown_link(scope: Scope) -> bool {
-    #[expect(deprecated)]
-    let repo = SCOPE_REPO.lock().expect("lock");
-
-    (0..scope.len()).all(|index| {
-        matches!(
-            repo.atom_str(scope.atom_at(index as usize)),
-            "markup" | "underline" | "link" | "markdown"
-        )
-    })
 }
 
 /// Return `true` if `target` may be handed to an `href`.
@@ -428,11 +427,11 @@ fn line_tokens_to_classed_spans_md(
                 span_start = s.len();
                 span_empty = true;
                 s.push_str("<span class=\"");
-                scope_to_classes(s, scope);
+                let is_link = scope_to_classes(s, scope);
                 s.push_str("\">");
                 span_delta += 1;
 
-                if is_markdown_link(scope) {
+                if is_link {
                     pending_link = true;
                 }
             }
