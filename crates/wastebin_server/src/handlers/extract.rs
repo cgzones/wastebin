@@ -173,6 +173,26 @@ where
     }
 }
 
+/// Reduce a `Referer` header value to a same-origin redirect target.
+fn referer_redirect(referer: Option<&str>) -> Redirect {
+    let Some(referer) = referer else {
+        return Redirect::to("/");
+    };
+
+    if referer.starts_with('/') && !referer.starts_with("//") {
+        return Redirect::to(referer);
+    }
+
+    let Ok(url) = referer.parse::<url::Url>() else {
+        return Redirect::to("/");
+    };
+
+    match url.query() {
+        Some(query) => Redirect::to(&format!("{}?{query}", url.path())),
+        None => Redirect::to(url.path()),
+    }
+}
+
 impl<S> FromRequestParts<S> for SafeReferer
 where
     S: Send + Sync,
@@ -183,30 +203,12 @@ where
         parts: &mut Parts,
         _state: &S,
     ) -> impl Future<Output = Result<Self, Self::Rejection>> {
-        let redirect = parts
+        let referer = parts
             .headers
             .get(http::header::REFERER)
-            .and_then(|referer| referer.to_str().ok())
-            .map(|referer| {
-                if referer.starts_with('/') && !referer.starts_with("//") {
-                    Redirect::to(referer)
-                } else {
-                    referer
-                        .parse::<url::Url>()
-                        .ok()
-                        .map(|url| {
-                            let path = url.path();
-                            url.query().map_or_else(
-                                || Redirect::to(path),
-                                |q| Redirect::to(&format!("{path}?{q}")),
-                            )
-                        })
-                        .unwrap_or_else(|| Redirect::to("/"))
-                }
-            })
-            .unwrap_or_else(|| Redirect::to("/"));
+            .and_then(|referer| referer.to_str().ok());
 
-        std::future::ready(Ok(SafeReferer(redirect)))
+        std::future::ready(Ok(SafeReferer(referer_redirect(referer))))
     }
 }
 
@@ -241,12 +243,13 @@ where
 
 /// Map a single language tag (e.g. `en`, `de-AT`) to a supported [`Lang`].
 fn lang_from_tag(tag: &str) -> Option<Lang> {
-    match tag.split('-').next()?.trim() {
-        "en" | "eN" | "En" | "EN" => Some(Lang::En),
-        "de" | "dE" | "De" | "DE" => Some(Lang::De),
-        "zh" | "zH" | "Zh" | "ZH" => Some(Lang::Zh),
-        _ => None,
-    }
+    const TAGS: [(&str, Lang); 3] = [("en", Lang::En), ("de", Lang::De), ("zh", Lang::Zh)];
+
+    let primary = tag.split('-').next()?.trim();
+
+    TAGS.into_iter()
+        .find(|(tag, _)| primary.eq_ignore_ascii_case(tag))
+        .map(|(_, lang)| lang)
 }
 
 /// Pick the best supported language from an `Accept-Language` header value,
