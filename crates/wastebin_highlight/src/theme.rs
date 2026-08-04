@@ -1,9 +1,13 @@
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use syntect::highlighting::{self, ThemeSet};
 use syntect::html::{ClassStyle, css_for_theme_with_class_style};
-use two_face::theme::EmbeddedThemeName;
+use two_face::theme::{EmbeddedLazyThemeSet, EmbeddedThemeName};
+
+/// Deserializing the embedded theme dump is not cheap, so do it once.
+static THEMES: LazyLock<EmbeddedLazyThemeSet> = LazyLock::new(two_face::theme::extra);
 
 /// Supported themes.
 #[derive(Copy, Clone)]
@@ -50,23 +54,19 @@ impl Theme {
 
     /// Return light syntect highlighting theme.
     #[must_use]
-    pub fn light_theme(self) -> syntect::highlighting::Theme {
-        let theme_set = two_face::theme::extra();
-
+    pub fn light_theme(self) -> highlighting::Theme {
         match self {
             Theme::Ayu => {
                 let theme = include_str!("../themes/ayu-light.tmTheme");
                 ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
             }
-            Theme::Base16Ocean => theme_set.get(EmbeddedThemeName::Base16OceanLight).clone(),
-            Theme::Catppuccin => theme_set.get(EmbeddedThemeName::CatppuccinLatte).clone(),
-            Theme::Coldark => theme_set.get(EmbeddedThemeName::ColdarkCold).clone(),
-            Theme::Gruvbox => theme_set.get(EmbeddedThemeName::GruvboxLight).clone(),
-            Theme::Monokai => theme_set
-                .get(EmbeddedThemeName::MonokaiExtendedLight)
-                .clone(),
-            Theme::Onehalf => theme_set.get(EmbeddedThemeName::OneHalfLight).clone(),
-            Theme::Solarized => theme_set.get(EmbeddedThemeName::SolarizedLight).clone(),
+            Theme::Base16Ocean => THEMES.get(EmbeddedThemeName::Base16OceanLight).clone(),
+            Theme::Catppuccin => THEMES.get(EmbeddedThemeName::CatppuccinLatte).clone(),
+            Theme::Coldark => THEMES.get(EmbeddedThemeName::ColdarkCold).clone(),
+            Theme::Gruvbox => THEMES.get(EmbeddedThemeName::GruvboxLight).clone(),
+            Theme::Monokai => THEMES.get(EmbeddedThemeName::MonokaiExtendedLight).clone(),
+            Theme::Onehalf => THEMES.get(EmbeddedThemeName::OneHalfLight).clone(),
+            Theme::Solarized => THEMES.get(EmbeddedThemeName::SolarizedLight).clone(),
         }
     }
 
@@ -78,21 +78,19 @@ impl Theme {
 
     /// Return dark syntect highlighting theme.
     #[must_use]
-    pub fn dark_theme(self) -> syntect::highlighting::Theme {
-        let theme_set = two_face::theme::extra();
-
+    pub fn dark_theme(self) -> highlighting::Theme {
         match self {
             Theme::Ayu => {
                 let theme = include_str!("../themes/ayu-dark.tmTheme");
                 ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
             }
-            Theme::Base16Ocean => theme_set.get(EmbeddedThemeName::Base16OceanDark).clone(),
-            Theme::Catppuccin => theme_set.get(EmbeddedThemeName::CatppuccinMocha).clone(),
-            Theme::Coldark => theme_set.get(EmbeddedThemeName::ColdarkDark).clone(),
-            Theme::Gruvbox => theme_set.get(EmbeddedThemeName::GruvboxDark).clone(),
-            Theme::Monokai => theme_set.get(EmbeddedThemeName::MonokaiExtended).clone(),
-            Theme::Onehalf => theme_set.get(EmbeddedThemeName::OneHalfDark).clone(),
-            Theme::Solarized => theme_set.get(EmbeddedThemeName::SolarizedDark).clone(),
+            Theme::Base16Ocean => THEMES.get(EmbeddedThemeName::Base16OceanDark).clone(),
+            Theme::Catppuccin => THEMES.get(EmbeddedThemeName::CatppuccinMocha).clone(),
+            Theme::Coldark => THEMES.get(EmbeddedThemeName::ColdarkDark).clone(),
+            Theme::Gruvbox => THEMES.get(EmbeddedThemeName::GruvboxDark).clone(),
+            Theme::Monokai => THEMES.get(EmbeddedThemeName::MonokaiExtended).clone(),
+            Theme::Onehalf => THEMES.get(EmbeddedThemeName::OneHalfDark).clone(),
+            Theme::Solarized => THEMES.get(EmbeddedThemeName::SolarizedDark).clone(),
         }
     }
 
