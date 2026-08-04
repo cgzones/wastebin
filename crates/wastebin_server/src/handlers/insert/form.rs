@@ -2,13 +2,13 @@ use std::num::NonZeroU32;
 
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::cache::Key;
+use crate::errors;
 use crate::handlers::extract::Uids;
 use crate::handlers::html::{Chrome, SameSite};
 use crate::handlers::uid_cookie;
@@ -73,15 +73,13 @@ pub async fn post(
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
     let entry = match entry {
         Ok(Form(entry)) => entry,
-        // The body limit arrives here as a rejection like any other, but folding it into
-        // "malformed" told someone whose upload was simply too big that their form was broken —
-        // and answered with a different status than the JSON endpoint does for the same body.
+        // This route consumes its own rejection, so it never reaches `handle_service_errors` —
+        // hence the shared table, rather than a second one that drifts. Folding the body limit
+        // into "malformed" told someone whose upload was simply too big that their form was
+        // broken, and answered differently than the JSON endpoint does for the same body.
         Err(rejection) => {
-            let error = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
-                crate::Error::PayloadTooLarge
-            } else {
-                crate::Error::MalformedForm
-            };
+            let error =
+                errors::rejection_error(rejection.status()).unwrap_or(crate::Error::MalformedForm);
 
             return Err(chrome.error(error));
         }
@@ -131,6 +129,26 @@ mod tests {
     use crate::test_helpers::{Client, StoreCookies, some_entry};
     use reqwest::{StatusCode, header};
     use std::collections::HashMap;
+
+    /// This route consumes its own `FormRejection`, so `handle_service_errors` never sees it. With
+    /// a table of its own it answered an unsupported content type as a malformed form — a 422
+    /// describing the fields, where the same body on the JSON endpoint correctly gets a 415.
+    #[tokio::test]
+    async fn an_unsupported_content_type_is_not_a_malformed_form()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .post_form()
+            .header(header::CONTENT_TYPE, "application/xml")
+            .body("<x/>")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn cross_site_insert_is_rejected() -> Result<(), Box<dyn std::error::Error>> {

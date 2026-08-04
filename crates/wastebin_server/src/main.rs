@@ -198,13 +198,29 @@ async fn handle_service_errors(chrome: Chrome, req: Request, next: Next) -> Resp
         .and_then(|content_type| content_type.to_str().ok())
         .is_some_and(|content_type| content_type.starts_with("text/plain"));
 
-    let error = match response.status() {
-        StatusCode::PAYLOAD_TOO_LARGE => Error::PayloadTooLarge,
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => Error::UnsupportedMediaType,
-        StatusCode::METHOD_NOT_ALLOWED if !asked_options => Error::MethodNotAllowed,
-        StatusCode::UNPROCESSABLE_ENTITY if is_rejection => Error::MalformedForm,
-        StatusCode::BAD_REQUEST if is_rejection => Error::MalformedRequest,
-        _ => return response,
+    let status = response.status();
+
+    // A 405 is the router's answer, not an extractor's, so it is recognised by status alone.
+    let error = if status == StatusCode::METHOD_NOT_ALLOWED {
+        if asked_options {
+            return response;
+        }
+
+        Error::MethodNotAllowed
+    } else {
+        // 413 and 415 describe the request whatever produced them, so they are rewritten on
+        // sight; 422 and 400 are only ours to reinterpret when a rejection is what produced them.
+        let ours = is_rejection
+            || matches!(
+                status,
+                StatusCode::PAYLOAD_TOO_LARGE | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            );
+
+        let Some(error) = ours.then(|| errors::rejection_error(status)).flatten() else {
+            return response;
+        };
+
+        error
     };
 
     // The `Allow` a 405 is required to carry is not on `response` yet: axum attaches it as the

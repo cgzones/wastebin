@@ -112,6 +112,23 @@ pub(crate) struct JsonError {
 /// Response carrying a status code and the error message as JSON.
 pub(crate) type JsonErrorResponse = (StatusCode, Json<JsonError>);
 
+/// Classify an extractor rejection by the status it answers with.
+///
+/// The form route consumes its own `FormRejection`, while every other rejection reaches
+/// `handle_service_errors` as a finished response — so both go through this instead of keeping a
+/// table each. They had already drifted: the form route reported an unsupported content type as a
+/// malformed form.
+#[must_use]
+pub(crate) fn rejection_error(status: StatusCode) -> Option<Error> {
+    match status {
+        StatusCode::PAYLOAD_TOO_LARGE => Some(Error::PayloadTooLarge),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(Error::UnsupportedMediaType),
+        StatusCode::UNPROCESSABLE_ENTITY => Some(Error::MalformedForm),
+        StatusCode::BAD_REQUEST => Some(Error::MalformedRequest),
+        _ => None,
+    }
+}
+
 impl From<Error> for StatusCode {
     fn from(err: Error) -> Self {
         Self::from(&err)
@@ -142,9 +159,9 @@ impl From<&Error> for StatusCode {
             | Error::SyntaxHighlighting(
                 wastebin_highlight::Error::TooDeeplyNested(_)
                 | wastebin_highlight::Error::TooLarge(_),
-            ) => StatusCode::BAD_REQUEST,
+            )
+            | Error::MalformedRequest => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
-            Error::MalformedRequest => StatusCode::BAD_REQUEST,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
