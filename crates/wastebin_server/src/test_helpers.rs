@@ -33,7 +33,9 @@ impl Client {
         store_cookies: StoreCookies,
         ratelimit_delete: Option<Arc<Ratelimiter>>,
     ) -> Self {
-        let (db, handler) = Database::new(db::Open::Memory).expect("open memory database");
+        let (db, handler) =
+            Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
+                .expect("open memory database");
         let cache = Cache::new(NonZeroUsize::new(128).unwrap()).unwrap();
         let key = Key::generate();
         let expirations = "0".parse::<ExpirationSet>().unwrap();

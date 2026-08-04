@@ -7,7 +7,7 @@ use rusqlite::{Connection, Transaction, params, params_from_iter};
 use rusqlite_migration::{HookError, M, Migrations};
 use tokio::sync::oneshot;
 
-use crate::crypto::{self, Password};
+use crate::crypto::{self, Password, Salt};
 use crate::expiration::Expiration;
 use crate::id::Id;
 use read::{DatabaseEntry, ListEntry, Metadata};
@@ -45,6 +45,8 @@ pub enum Error {
 pub struct Database {
     /// Sender for database commands.
     sender: kanal::AsyncSender<Command>,
+    /// Salt used to derive encryption keys from paste passwords.
+    salt: Salt,
 }
 
 /// Actual database handler that owns the connection to the underlying sqlite database.
@@ -142,7 +144,7 @@ pub enum Open {
 
 /// Module with types for insertion.
 pub mod write {
-    use crate::crypto::{Encrypted, Password, Plaintext};
+    use crate::crypto::{Encrypted, Password, Plaintext, Salt};
     use crate::db::Error;
     use async_compression::tokio::bufread::ZstdEncoder;
     use chacha20poly1305::XNonce;
@@ -204,11 +206,12 @@ pub mod write {
 
     impl CompressedEntry {
         /// Encrypt if password is set.
-        pub async fn encrypt(self) -> Result<DatabaseEntry, Error> {
+        pub async fn encrypt(self, salt: &Salt) -> Result<DatabaseEntry, Error> {
             let (data, nonce) = if let Some(password) = &self.entry.password {
                 let password = Password::from(password.as_bytes().to_vec());
                 let plaintext = Plaintext::from(self.data);
-                let Encrypted { ciphertext, nonce } = plaintext.encrypt(password).await?;
+                let Encrypted { ciphertext, nonce } =
+                    plaintext.encrypt(password, salt.clone()).await?;
                 (ciphertext, Some(nonce))
             } else {
                 (self.data, None)
@@ -225,7 +228,7 @@ pub mod write {
 
 /// Module with types for reading from the database.
 pub mod read {
-    use crate::crypto::{Encrypted, Password};
+    use crate::crypto::{Encrypted, Password, Salt};
     use crate::db::Error;
     use crate::expiration::Expiration;
     use crate::id::Id;
@@ -306,6 +309,7 @@ pub mod read {
         pub async fn decrypt(
             self,
             password: Option<Password>,
+            salt: &Salt,
         ) -> Result<CompressedReadEntry, Error> {
             match (self.nonce, password) {
                 (Some(_), None) => Err(Error::NoPassword),
@@ -315,7 +319,7 @@ pub mod read {
                 }),
                 (Some(nonce), Some(password)) => {
                     let encrypted = Encrypted::new(self.data, nonce);
-                    let decrypted = encrypted.decrypt(password).await?;
+                    let decrypted = encrypted.decrypt(password, salt.clone()).await?;
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
@@ -605,12 +609,15 @@ impl Handler {
 impl Database {
     /// Create new database with the given `method` as well as a [`Handler`] future that makes the
     /// actual calls.
-    pub fn new(method: Open) -> Result<(Self, impl Future<Output = Result<(), Error>>), Error> {
+    pub fn new(
+        method: Open,
+        salt: Salt,
+    ) -> Result<(Self, impl Future<Output = Result<(), Error>>), Error> {
         let (sender, receiver) = kanal::bounded(256);
         let sender = sender.to_async();
         let handler = Handler::new(method, receiver)?;
         let fut = async move { tokio::task::spawn_blocking(|| handler.run()).await? };
-        Ok((Self { sender }, fut))
+        Ok((Self { sender, salt }, fut))
     }
 
     /// Send `command` to the [`Handler`] and await its response.
@@ -630,7 +637,7 @@ impl Database {
     /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
     /// Returns the id of the new entry on success.
     pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
-        let entry = entry.compress().await?.encrypt().await?;
+        let entry = entry.compress().await?.encrypt(&self.salt).await?;
 
         self.call(|result| Command::Insert { entry, result }).await
     }
@@ -644,7 +651,11 @@ impl Database {
             return Err(Error::NotFound);
         }
 
-        let data = entry.decrypt(password).await?.decompress().await?;
+        let data = entry
+            .decrypt(password, &self.salt)
+            .await?
+            .decompress()
+            .await?;
 
         if data.metadata.must_be_deleted {
             self.delete(id).await?;
@@ -725,7 +736,7 @@ mod tests {
     }
 
     fn new_db() -> Result<Database, Box<dyn std::error::Error>> {
-        let (db, handler) = Database::new(Open::Memory)?;
+        let (db, handler) = Database::new(Open::Memory, Salt::try_from("testsalt".to_string())?)?;
         tokio::spawn(handler);
         Ok(db)
     }

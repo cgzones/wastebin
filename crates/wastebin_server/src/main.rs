@@ -35,6 +35,7 @@ use crate::handlers::extract::Theme;
 use crate::handlers::{delete, download, html, insert, raw, robots, theme};
 use crate::i18n::Lang;
 use wastebin_core::db::Database;
+use wastebin_core::env as core_env;
 
 /// Reference counted [`page::Page`] wrapper.
 pub(crate) type Page = Arc<page::Page>;
@@ -237,7 +238,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     env::validate_expirations(&expirations, max_expiration)?;
 
     let cache = Cache::new(cache_size)?;
-    let (db, db_handler) = Database::new(method)?;
+    let (db, db_handler) = Database::new(method, core_env::password_hash_salt()?)?;
 
     tracing::debug!("serving on {socket_type}");
     tracing::debug!("caching {cache_size} paste highlights");

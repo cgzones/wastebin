@@ -1,3 +1,5 @@
+use crate::crypto;
+
 /// Names of environment variables.
 pub mod vars {
     /// Address and port the server binds to.
@@ -32,14 +34,21 @@ pub mod vars {
     pub const RATELIMIT_DELETE: &str = "WASTEBIN_RATELIMIT_DELETE";
 }
 
-#[must_use]
-pub(crate) fn password_hash_salt() -> String {
-    std::env::var(vars::PASSWORD_SALT).unwrap_or_else(|_| {
-        tracing::info!(
-            "Using default salt for encryption. Consider setting `{}`.",
-            vars::PASSWORD_SALT
-        );
+/// Read the argon2 salt from the environment, falling back to a fixed default.
+///
+/// Call once at startup and pass the result to [`crate::db::Database::new`], so the value is
+/// fixed for the process rather than read lazily on the first encrypted paste. A salt shorter
+/// than [`crypto::MIN_SALT_LEN`] is rejected here, since argon2 would otherwise reject it on
+/// every encrypted paste at runtime.
+pub fn password_hash_salt() -> Result<crypto::Salt, crypto::Error> {
+    std::env::var(vars::PASSWORD_SALT)
+        .unwrap_or_else(|_| {
+            tracing::info!(
+                "Using default salt for encryption. Consider setting `{}`.",
+                vars::PASSWORD_SALT
+            );
 
-        "somesalt".to_string()
-    })
+            "somesalt".to_string()
+        })
+        .try_into()
 }
