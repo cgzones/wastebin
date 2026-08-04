@@ -2,7 +2,7 @@ use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use syntect::html::{ClassStyle, ClassedHTMLGenerator, line_tokens_to_classed_spans};
+use syntect::html::{ClassStyle, line_tokens_to_classed_spans};
 use syntect::parsing::{
     BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet,
 };
@@ -32,7 +32,7 @@ const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
 /// body into 81 MB held whole in memory, per request, and far too large for the cache to ever
 /// absorb — so every fetch paid for it again. The bound is on what one response may cost, not on
 /// what a paste may hold: `/raw` and the download still serve the bytes.
-const MAX_RENDERED_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_RENDERED_BYTES: usize = 16 * 1024 * 1024;
 
 /// How long one render may spend in the syntax engine before the rest is emitted unhighlighted.
 ///
@@ -380,17 +380,50 @@ impl Highlighter {
             .find_syntax_by_token(token)
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
-        let mut generator = ClassedHTMLGenerator::new_with_class_style(
-            syntax,
-            &self.syntax_set,
-            ClassStyle::Spaced,
-        );
+        // Driving the parser directly rather than through `ClassedHTMLGenerator` keeps the buffer
+        // in reach, so the same bounds the source view applies per row apply here: a block is
+        // otherwise highlighted whole and held whole, and highlighting expands heavily — 468 KB of
+        // Perl quotes became 49 MB of markup, per request, uncancellable once it has started.
+        let mut parse_state = ParseState::new(syntax);
+        let mut scope_stack = ScopeStack::new();
+        let mut inner = String::new();
+        let mut open_spans: isize = 0;
+
+        let started = Instant::now();
+        // Set once the syntax engine has had its budget; the remaining lines are escaped only.
+        let mut plain_from_here = false;
 
         for line in LinesWithEndings::from(text) {
-            generator.parse_html_for_line_which_includes_newline(line)?;
+            if plain_from_here || line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
+                escape(line, &mut inner);
+            } else {
+                let parsed = parse_state.parse_line(line, &self.syntax_set)?;
+                let (formatted, delta) = line_tokens_to_classed_spans(
+                    line,
+                    parsed.as_slice(),
+                    ClassStyle::Spaced,
+                    &mut scope_stack,
+                )?;
+
+                open_spans += delta;
+                inner.push_str(&formatted);
+            }
+
+            if inner.len() > MAX_RENDERED_BYTES {
+                return Err(Error::TooLarge(MAX_RENDERED_BYTES));
+            }
+
+            if !plain_from_here && started.elapsed() > HIGHLIGHT_TIME_BUDGET {
+                plain_from_here = true;
+            }
         }
 
-        let inner = generator.finalize();
+        // Spans may still be open across the end of the block, or across the point the budget ran
+        // out; the block owns them, so close them here rather than letting them escape `</code>`.
+        inner.extend(std::iter::repeat_n(
+            "</span>",
+            open_spans.max(0).unsigned_abs(),
+        ));
         let is_safe_token = !token.is_empty()
             && token
                 .chars()

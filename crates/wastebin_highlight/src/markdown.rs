@@ -5,7 +5,7 @@ use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html,
 };
 
-use crate::highlight::Error;
+use crate::highlight::{Error, MAX_RENDERED_BYTES};
 use crate::{Highlighter, Html};
 
 const OPTIONS: Options = Options::ENABLE_TABLES
@@ -134,6 +134,8 @@ fn rewrite_events<'a>(
 ) -> Result<Vec<Event<'a>>, Error> {
     let mut out = Vec::new();
     let mut pending: Option<(String, String)> = None;
+    // Each block bounds itself, but a document is free to hold many of them.
+    let mut highlighted_bytes: usize = 0;
 
     for event in parser {
         match event {
@@ -147,6 +149,12 @@ fn rewrite_events<'a>(
             Event::End(TagEnd::CodeBlock) => match pending.take() {
                 Some((lang, code)) => {
                     let html = highlighter.highlight_code_block(&code, &lang)?;
+
+                    highlighted_bytes = highlighted_bytes.saturating_add(html.len());
+                    if highlighted_bytes > MAX_RENDERED_BYTES {
+                        return Err(Error::TooLarge(MAX_RENDERED_BYTES));
+                    }
+
                     out.push(Event::Html(CowStr::from(html)));
                 }
                 None => out.push(Event::End(TagEnd::CodeBlock)),
@@ -319,6 +327,41 @@ mod tests {
         assert!(!html.contains("javascript:"), "got: {html}");
         assert!(!html.contains("onclick"), "got: {html}");
         Ok(())
+    }
+
+    /// A fenced block went through the syntax engine whole, with none of the bounds the source
+    /// view applies. Highlighting expands heavily — 468 KB of Perl quotes became 49 MB of markup —
+    /// and the request timeout does not reclaim it, because `spawn_blocking` is not cancellable.
+    #[test]
+    fn a_hugely_expanding_code_block_is_refused() {
+        // Escaping alone expands a quote sixfold, which is enough to blow the budget without
+        // depending on how fast the syntax engine happens to be in this build profile.
+        let body = "\"".repeat(3 * 1024 * 1024);
+        let md = format!("```pl\n{body}\n```\n");
+
+        let result = render(&md, &Highlighter::default());
+
+        assert!(
+            matches!(result, Err(Error::TooLarge(_))),
+            "expected TooLarge"
+        );
+    }
+
+    /// A single enormous line is where the regex engines misbehave worst, so it is escaped rather
+    /// than highlighted — the same cutoff the source view applies per row.
+    #[test]
+    fn an_overlong_code_block_line_is_not_highlighted() {
+        let line = "a ".repeat(4096);
+        let md = format!("```rs\n{line}\n```\n");
+
+        let html = render_string(&md, &Highlighter::default()).unwrap();
+
+        assert!(html.contains(&line), "content was dropped");
+        assert!(
+            !html.contains("<span class=\"source rust\">"),
+            "long line was still highlighted: {}",
+            &html[..html.len().min(200)]
+        );
     }
 
     #[test]
