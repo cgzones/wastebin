@@ -147,35 +147,25 @@ fn main() {
             .into_inner(),
     };
 
-    let groups = [
-        Theme::Ayu,
-        Theme::Base16Ocean,
-        Theme::Catppuccin,
-        Theme::Coldark,
-        Theme::Gruvbox,
-        Theme::Monokai,
-        Theme::Onehalf,
-        Theme::RosePine,
-        Theme::Solarized,
-    ]
-    .into_iter()
-    .map(|theme| Group {
-        name: theme.name(),
-        panes: ["light", "dark"]
-            .into_iter()
-            .flat_map(|scheme| {
-                [View::Rendered, View::Source]
-                    .into_iter()
-                    .map(move |view| (scheme, view))
-            })
-            .map(|(scheme, view)| Pane {
-                scheme,
-                view,
-                document: document(scheme, view, &theme, &content),
-            })
-            .collect(),
-    })
-    .collect();
+    let groups = Theme::ALL
+        .into_iter()
+        .map(|theme| Group {
+            name: theme.name(),
+            panes: ["light", "dark"]
+                .into_iter()
+                .flat_map(|scheme| {
+                    [View::Rendered, View::Source]
+                        .into_iter()
+                        .map(move |view| (scheme, view))
+                })
+                .map(|(scheme, view)| Pane {
+                    scheme,
+                    view,
+                    document: document(scheme, view, &theme, &content),
+                })
+                .collect(),
+        })
+        .collect();
 
     println!("{}", Page { groups }.render().unwrap());
 }

@@ -1,11 +1,15 @@
 use std::io::Cursor;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 use syntect::highlighting::{self, ThemeSet};
 use syntect::html::{ClassStyle, css_for_theme_with_class_style};
-use two_face::theme::EmbeddedThemeName;
+use two_face::theme::{EmbeddedLazyThemeSet, EmbeddedThemeName};
 
 use crate::palette;
+
+/// Deserializing the embedded theme dump is not cheap, so do it once.
+static THEMES: LazyLock<EmbeddedLazyThemeSet> = LazyLock::new(two_face::theme::extra);
 
 /// Supported themes.
 #[derive(Copy, Clone)]
@@ -21,6 +25,14 @@ pub enum Theme {
     Solarized,
 }
 
+/// Where the light and dark variants of a [`Theme`] come from.
+enum Variants {
+    /// Bundled with `two_face`.
+    Embedded(EmbeddedThemeName, EmbeddedThemeName),
+    /// Shipped as `.tmTheme` sources with this crate.
+    File(&'static str, &'static str),
+}
+
 /// An error which can be returned when parsing a [`Theme`] from its string representation.
 #[derive(thiserror::Error, Debug)]
 #[error("failed to parse theme name")]
@@ -30,22 +42,27 @@ impl FromStr for Theme {
     type Err = ParseThemeNameError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ayu" => Ok(Theme::Ayu),
-            "base16ocean" => Ok(Theme::Base16Ocean),
-            "catppuccin" => Ok(Theme::Catppuccin),
-            "coldark" => Ok(Theme::Coldark),
-            "gruvbox" => Ok(Theme::Gruvbox),
-            "monokai" => Ok(Theme::Monokai),
-            "onehalf" => Ok(Theme::Onehalf),
-            "rosepine" => Ok(Theme::RosePine),
-            "solarized" => Ok(Theme::Solarized),
-            _ => Err(ParseThemeNameError),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|theme| theme.name() == s)
+            .ok_or(ParseThemeNameError)
     }
 }
 
 impl Theme {
+    /// All supported themes.
+    pub const ALL: [Self; 9] = [
+        Theme::Ayu,
+        Theme::Base16Ocean,
+        Theme::Catppuccin,
+        Theme::Coldark,
+        Theme::Gruvbox,
+        Theme::Monokai,
+        Theme::Onehalf,
+        Theme::RosePine,
+        Theme::Solarized,
+    ];
+
     /// Generate combined light CSS for the given Theme.
     #[must_use]
     pub fn light_css(self) -> Vec<u8> {
@@ -54,28 +71,8 @@ impl Theme {
 
     /// Return light syntect highlighting theme.
     #[must_use]
-    pub fn light_theme(self) -> syntect::highlighting::Theme {
-        let theme_set = two_face::theme::extra();
-
-        match self {
-            Theme::Ayu => {
-                let theme = include_str!("../themes/ayu-light.tmTheme");
-                ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
-            }
-            Theme::Base16Ocean => theme_set.get(EmbeddedThemeName::Base16OceanLight).clone(),
-            Theme::Catppuccin => theme_set.get(EmbeddedThemeName::CatppuccinLatte).clone(),
-            Theme::Coldark => theme_set.get(EmbeddedThemeName::ColdarkCold).clone(),
-            Theme::Gruvbox => theme_set.get(EmbeddedThemeName::GruvboxLight).clone(),
-            Theme::Monokai => theme_set
-                .get(EmbeddedThemeName::MonokaiExtendedLight)
-                .clone(),
-            Theme::Onehalf => theme_set.get(EmbeddedThemeName::OneHalfLight).clone(),
-            Theme::RosePine => {
-                let theme = include_str!("../themes/rose-pine-dawn.tmTheme");
-                ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
-            }
-            Theme::Solarized => theme_set.get(EmbeddedThemeName::SolarizedLight).clone(),
-        }
+    pub fn light_theme(self) -> highlighting::Theme {
+        self.theme(false)
     }
 
     /// Generate combined dark CSS for the given Theme.
@@ -86,32 +83,67 @@ impl Theme {
 
     /// Return dark syntect highlighting theme.
     #[must_use]
-    pub fn dark_theme(self) -> syntect::highlighting::Theme {
-        let theme_set = two_face::theme::extra();
+    pub fn dark_theme(self) -> highlighting::Theme {
+        self.theme(true)
+    }
 
+    /// Light and dark variants.
+    const fn variants(self) -> Variants {
         match self {
-            Theme::Ayu => {
-                let theme = include_str!("../themes/ayu-dark.tmTheme");
+            Theme::Ayu => Variants::File(
+                include_str!("../themes/ayu-light.tmTheme"),
+                include_str!("../themes/ayu-dark.tmTheme"),
+            ),
+            Theme::Base16Ocean => Variants::Embedded(
+                EmbeddedThemeName::Base16OceanLight,
+                EmbeddedThemeName::Base16OceanDark,
+            ),
+            Theme::Catppuccin => Variants::Embedded(
+                EmbeddedThemeName::CatppuccinLatte,
+                EmbeddedThemeName::CatppuccinMocha,
+            ),
+            Theme::Coldark => Variants::Embedded(
+                EmbeddedThemeName::ColdarkCold,
+                EmbeddedThemeName::ColdarkDark,
+            ),
+            Theme::Gruvbox => Variants::Embedded(
+                EmbeddedThemeName::GruvboxLight,
+                EmbeddedThemeName::GruvboxDark,
+            ),
+            Theme::Monokai => Variants::Embedded(
+                EmbeddedThemeName::MonokaiExtendedLight,
+                EmbeddedThemeName::MonokaiExtended,
+            ),
+            Theme::Onehalf => Variants::Embedded(
+                EmbeddedThemeName::OneHalfLight,
+                EmbeddedThemeName::OneHalfDark,
+            ),
+            Theme::RosePine => Variants::File(
+                include_str!("../themes/rose-pine-dawn.tmTheme"),
+                include_str!("../themes/rose-pine.tmTheme"),
+            ),
+            Theme::Solarized => Variants::Embedded(
+                EmbeddedThemeName::SolarizedLight,
+                EmbeddedThemeName::SolarizedDark,
+            ),
+        }
+    }
+
+    fn theme(self, dark: bool) -> highlighting::Theme {
+        match self.variants() {
+            Variants::Embedded(light, dark_name) => {
+                THEMES.get(if dark { dark_name } else { light }).clone()
+            }
+            Variants::File(light, dark_source) => {
+                let theme = if dark { dark_source } else { light };
                 ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
             }
-            Theme::Base16Ocean => theme_set.get(EmbeddedThemeName::Base16OceanDark).clone(),
-            Theme::Catppuccin => theme_set.get(EmbeddedThemeName::CatppuccinMocha).clone(),
-            Theme::Coldark => theme_set.get(EmbeddedThemeName::ColdarkDark).clone(),
-            Theme::Gruvbox => theme_set.get(EmbeddedThemeName::GruvboxDark).clone(),
-            Theme::Monokai => theme_set.get(EmbeddedThemeName::MonokaiExtended).clone(),
-            Theme::Onehalf => theme_set.get(EmbeddedThemeName::OneHalfDark).clone(),
-            Theme::RosePine => {
-                let theme = include_str!("../themes/rose-pine.tmTheme");
-                ThemeSet::load_from_reader(&mut Cursor::new(theme)).expect("loading theme")
-            }
-            Theme::Solarized => theme_set.get(EmbeddedThemeName::SolarizedDark).clone(),
         }
     }
 
     /// Return string representation of the theme name.
     #[must_use]
     pub const fn name(self) -> &'static str {
-        // Make sure that these match the ones in the `FromStr` implementation.
         match self {
             Theme::Ayu => "ayu",
             Theme::Base16Ocean => "base16ocean",
