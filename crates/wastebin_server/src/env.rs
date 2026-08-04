@@ -10,7 +10,7 @@ use wastebin_core::env::var;
 use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_MAX_BYTES, CACHE_SIZE, HTTP_TIMEOUT, MAX_BODY_SIZE,
     PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT,
-    RATELIMIT_PASSWORD, SIGNING_KEY,
+    RATELIMIT_PASSWORD, SIGNING_KEY, SOCKET_PATH,
 };
 use wastebin_core::{db, expiration, expiration::Expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
@@ -59,6 +59,8 @@ pub(crate) enum Error {
     MissingDefaultExpiration,
     #[error("binding to both TCP and Unix socket is not possible")]
     BothListeners,
+    #[error("{SOCKET_PATH} is not usable as a socket address (too long, or contains a NUL): {0}")]
+    SocketPath(PathBuf),
     #[error("failed to parse {RATELIMIT_INSERT}: {0}")]
     RatelimitInsert(ParseIntError),
     #[error("failed to parse {RATELIMIT_DELETE}: {0}")]
@@ -143,11 +145,27 @@ pub fn socket_type() -> Result<SocketType, Error> {
             let addr: SocketAddr = value.parse().map_err(|_| Error::AddressPort)?;
             Ok(SocketType::Tcp(addr))
         }
-        (None, Some(value)) => Ok(SocketType::Unix(value.into())),
+        (None, Some(value)) => Ok(SocketType::Unix(unix_socket_path(value)?)),
         (None, None) => {
             let addr = SocketAddr::new(Ipv4Addr::UNSPECIFIED.into(), 8088);
             Ok(SocketType::Tcp(addr))
         }
+    }
+}
+
+/// Check that `value` can actually name a socket, before anything else starts.
+///
+/// The kernel copies the path into `sockaddr_un::sun_path`, 108 bytes on Linux and fewer on other
+/// platforms, so a longer one cannot be bound. Rejecting it here names the variable at fault;
+/// leaving it to `bind` surfaces a bare `path must be shorter than SUN_LEN` once the database and
+/// everything else is already up. The limit is the platform's rather than a constant repeated
+/// here, so it is asked for rather than assumed.
+fn unix_socket_path(value: String) -> Result<PathBuf, Error> {
+    let path = PathBuf::from(value);
+
+    match std::os::unix::net::SocketAddr::from_pathname(&path) {
+        Ok(_) => Ok(path),
+        Err(_) => Err(Error::SocketPath(path)),
     }
 }
 
@@ -279,6 +297,21 @@ pub fn ratelimit_password() -> Result<Option<NonZeroU32>, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The kernel copies the path into `sockaddr_un::sun_path` — 108 bytes on Linux, fewer
+    /// elsewhere. Caught here, the operator is told which variable is wrong; left to `bind`, it
+    /// surfaces as a bare `path must be shorter than SUN_LEN` after the rest of startup has run.
+    #[test]
+    fn an_oversized_unix_socket_path_is_refused() {
+        let long = format!("/tmp/{}.sock", "s".repeat(200));
+
+        assert!(matches!(unix_socket_path(long), Err(Error::SocketPath(_))));
+    }
+
+    #[test]
+    fn an_ordinary_unix_socket_path_is_accepted() {
+        assert!(unix_socket_path("/tmp/wastebin.sock".to_string()).is_ok());
+    }
 
     #[test]
     fn validate_expirations_rejects_never_with_max() {
