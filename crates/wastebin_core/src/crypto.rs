@@ -92,10 +92,8 @@ impl Encrypted {
     pub async fn decrypt(self, password: Password) -> Result<Vec<u8>, Error> {
         spawn_blocking(move || {
             let cipher = cipher_from(&password.0)?;
-            let nonce = XNonce::try_from(self.nonce.as_slice())
-                .map_err(|_| Error::ChaCha20Poly1305Decrypt)?;
             let plaintext = cipher
-                .decrypt(&nonce, self.ciphertext.as_ref())
+                .decrypt(&self.nonce, self.ciphertext.as_ref())
                 .map_err(|_| Error::ChaCha20Poly1305Decrypt)?;
             Ok(plaintext)
         })
