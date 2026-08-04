@@ -22,10 +22,7 @@ pub async fn delete(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use crate::Ratelimiter;
-    use crate::test_helpers::{Client, StoreCookies, some_entry};
+    use crate::test_helpers::{Client, StoreCookies, one_token_limiter, some_entry};
     use reqwest::StatusCode;
 
     #[tokio::test]
@@ -65,12 +62,7 @@ mod tests {
     #[tokio::test]
     async fn bogus_deletes_do_not_consume_ratelimit_budget()
     -> Result<(), Box<dyn std::error::Error>> {
-        let limiter = Arc::new(
-            Ratelimiter::builder(1)
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_delete(StoreCookies(true), Some(limiter)).await;
 
         let res = client.post_form().form(&some_entry()).send().await?;
@@ -97,12 +89,7 @@ mod tests {
 
     #[tokio::test]
     async fn exhausted_ratelimit_prevents_deletion() -> Result<(), Box<dyn std::error::Error>> {
-        let limiter = Arc::new(
-            Ratelimiter::builder(1)
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_delete(StoreCookies(true), Some(limiter)).await;
 
         let res = client.post_form().form(&some_entry()).send().await?;
