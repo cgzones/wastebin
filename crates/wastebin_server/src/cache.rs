@@ -29,23 +29,37 @@ pub(crate) enum Mode {
 /// Cache slot: a paste identity paired with the representation it holds.
 type Slot = (Key, Mode);
 
+/// The LRU behind [`Cache`], absent when caching is disabled.
+type Store = Option<Arc<Mutex<LruCache<Slot, Arc<str>>>>>;
+
 /// Stores rendered HTML, shared so that cache hits are a refcount bump rather than a copy of the
 /// whole document.
 #[derive(Clone)]
 pub(crate) struct Cache {
-    inner: Arc<Mutex<LruCache<Slot, Arc<str>>>>,
+    /// [`None`] when caching is disabled, i.e. `WASTEBIN_CACHE_SIZE=0`.
+    inner: Store,
 }
 
 impl Cache {
-    pub fn new(size: NonZeroUsize) -> Result<Self, env::Error> {
-        let cache = LruCache::builder().max_size(size.into()).build()?;
-        let inner = Arc::new(Mutex::new(cache));
+    /// Create a cache holding up to `size` rendered documents; [`None`] disables caching.
+    pub fn new(size: Option<NonZeroUsize>) -> Result<Self, env::Error> {
+        let Some(size) = size else {
+            return Ok(Self { inner: None });
+        };
 
-        Ok(Self { inner })
+        let cache = LruCache::builder().max_size(size.get()).build()?;
+
+        Ok(Self {
+            inner: Some(Arc::new(Mutex::new(cache))),
+        })
     }
 
     pub fn put(&self, key: &Key, mode: Mode, value: Arc<str>) {
-        self.inner
+        let Some(inner) = &self.inner else {
+            return;
+        };
+
+        inner
             .lock()
             .expect("getting lock")
             .cache_set((key.clone(), mode), value);
@@ -54,6 +68,7 @@ impl Cache {
     #[must_use]
     pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<str>> {
         self.inner
+            .as_ref()?
             .lock()
             .expect("getting lock")
             .cache_get(&(key.clone(), mode))
@@ -102,6 +117,19 @@ mod tests {
 
         assert!(Key::from_str("foo").is_err());
         assert!(Key::from_str("bar.rs").is_err());
+    }
+
+    #[test]
+    fn zero_size_disables_caching() {
+        let key = Key::from_str("bJZCna").unwrap();
+
+        let cache = Cache::new(NonZeroUsize::new(1)).unwrap();
+        cache.put(&key, Mode::Source, Arc::from("cached"));
+        assert_eq!(cache.get(&key, Mode::Source).as_deref(), Some("cached"));
+
+        let cache = Cache::new(None).unwrap();
+        cache.put(&key, Mode::Source, Arc::from("cached"));
+        assert!(cache.get(&key, Mode::Source).is_none());
     }
 
     #[test]

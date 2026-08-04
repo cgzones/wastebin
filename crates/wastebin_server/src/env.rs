@@ -80,11 +80,14 @@ pub fn theme() -> Result<Theme, Error> {
     var(vars::THEME)?.map_or(Ok(Theme::Ayu), |value| Ok(value.parse()?))
 }
 
-pub fn cache_size() -> Result<NonZeroUsize, Error> {
-    var(vars::CACHE_SIZE)?.map_or_else(
-        || Ok(NonZeroUsize::new(128).expect("128 is non-zero")),
-        |value| value.parse::<NonZeroUsize>().map_err(Error::CacheSize),
-    )
+/// Number of rendered documents to cache; [`None`] (i.e. a configured zero) disables caching.
+pub fn cache_size() -> Result<Option<NonZeroUsize>, Error> {
+    var(vars::CACHE_SIZE)?.map_or(Ok(NonZeroUsize::new(128)), |value| {
+        value
+            .parse::<usize>()
+            .map(NonZeroUsize::new)
+            .map_err(Error::CacheSize)
+    })
 }
 
 pub fn database_method() -> Result<db::Open, Error> {

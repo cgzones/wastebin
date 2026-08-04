@@ -241,7 +241,11 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let (db, db_handler) = Database::new(method, core_env::password_hash_salt()?)?;
 
     tracing::debug!("serving on {socket_type}");
-    tracing::debug!("caching {cache_size} paste highlights");
+    if let Some(size) = cache_size {
+        tracing::debug!("caching {size} paste highlights")
+    } else {
+        tracing::debug!("caching disabled")
+    }
     tracing::debug!("restricting maximum body size to {max_body_size} bytes");
     tracing::debug!("enforcing a http timeout of {timeout:#?}");
     tracing::debug!("enforcing a maximum expiry of {max_expiration:?}");
