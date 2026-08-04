@@ -35,6 +35,18 @@ const MONTH_SECS: u64 = 30 * 24 * 60 * 60; // 30 days
 /// Rough number of seconds in a year
 const YEAR_SECS: u64 = 365 * 24 * 60 * 60; // 365 days
 
+/// Time units in descending order, as `(magnitude, seconds, singular, plural)`. Drives both
+/// parsing of the magnitude suffix and the human-readable formatting.
+const UNITS: [(&str, u64, &str, &str); 7] = [
+    ("y", YEAR_SECS, "year", "years"),
+    ("M", MONTH_SECS, "month", "months"),
+    ("w", 7 * 24 * 60 * 60, "week", "weeks"),
+    ("d", 24 * 60 * 60, "day", "days"),
+    ("h", 60 * 60, "hour", "hours"),
+    ("m", 60, "min", "mins"),
+    ("s", 1, "sec", "secs"),
+];
+
 /// A single [`Expiration`] can either be an unsigned number or an unsigned number followed by `=d`
 /// to denote a default expiration.
 impl FromStr for Expiration {
@@ -52,18 +64,12 @@ impl FromStr for Expiration {
 
             let val = val.parse::<u64>().map_err(Error::ParsingNumber)?;
 
-            let mag = match mag {
-                "s" => 1,
-                "m" => 60,
-                "h" => 60 * 60,
-                "d" => 24 * 60 * 60,
-                "w" => 7 * 24 * 60 * 60,
-                "M" => MONTH_SECS,
-                "y" => YEAR_SECS,
-                _ => Err(Error::IllegalMagnitude)?,
-            };
+            let (_, mag, _, _) = UNITS
+                .iter()
+                .find(|(magnitude, ..)| *magnitude == mag)
+                .ok_or(Error::IllegalMagnitude)?;
 
-            val.checked_mul(mag).ok_or(Error::Overflow)?
+            val.checked_mul(*mag).ok_or(Error::Overflow)?
         } else {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
@@ -94,7 +100,6 @@ impl Display for Expiration {
             (r > 0).then_some((r, dividend % divisor))
         }
 
-        const SEPARATOR: &str = ", ";
         let mut sep = "";
         let mut secs = self.duration.as_secs();
 
@@ -102,70 +107,13 @@ impl Display for Expiration {
             return write!(f, "never");
         }
 
-        if let Some((years, rem)) = div(secs, YEAR_SECS) {
-            if years > 1 {
-                write!(f, "{years} years")?;
-            } else {
-                write!(f, "1 year")?;
+        for (_, unit, singular, plural) in UNITS {
+            if let Some((value, rem)) = div(secs, unit) {
+                let name = if value > 1 { plural } else { singular };
+                write!(f, "{sep}{value} {name}")?;
+                secs = rem;
+                sep = ", ";
             }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if let Some((months, rem)) = div(secs, MONTH_SECS) {
-            if months > 1 {
-                write!(f, "{sep}{months} months")?;
-            } else {
-                write!(f, "{sep}1 month")?;
-            }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if let Some((weeks, rem)) = div(secs, 60 * 60 * 24 * 7) {
-            if weeks > 1 {
-                write!(f, "{sep}{weeks} weeks")?;
-            } else {
-                write!(f, "{sep}1 week")?;
-            }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if let Some((days, rem)) = div(secs, 60 * 60 * 24) {
-            if days > 1 {
-                write!(f, "{sep}{days} days")?;
-            } else {
-                write!(f, "{sep}1 day")?;
-            }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if let Some((hours, rem)) = div(secs, 60 * 60) {
-            if hours > 1 {
-                write!(f, "{sep}{hours} hours")?;
-            } else {
-                write!(f, "{sep}1 hour")?;
-            }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if let Some((minutes, rem)) = div(secs, 60) {
-            if minutes > 1 {
-                write!(f, "{sep}{minutes} mins")?;
-            } else {
-                write!(f, "{sep}1 min")?;
-            }
-            secs = rem;
-            sep = SEPARATOR;
-        }
-
-        if secs > 1 {
-            write!(f, "{sep}{secs} secs")?;
-        } else if secs == 1 {
-            write!(f, "{sep}1 sec")?;
         }
 
         Ok(())
