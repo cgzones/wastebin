@@ -76,7 +76,7 @@ struct Handler {
 /// the metadata-only and full-entry queries cannot drift out of sync with the parser.
 macro_rules! metadata_columns {
     () => {
-        "uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, expires < datetime('now')"
+        "uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, expires < datetime('now'), nonce IS NOT NULL"
     };
 }
 
@@ -106,6 +106,7 @@ fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, boo
             title: row.get::<_, Option<String>>(1)?,
             expiration,
             must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
+            is_encrypted: row.get::<_, Option<bool>>(5)?.unwrap_or(false),
         },
         row.get::<_, Option<bool>>(4)?.unwrap_or(false),
     ))
@@ -305,6 +306,11 @@ pub mod read {
         /// Entry is deleted once the [`Burn`] that [`super::Database::get`] hands out for it is
         /// redeemed.
         pub must_be_deleted: bool,
+        /// Entry's content is encrypted, so reading it needs a password.
+        ///
+        /// The title is not encrypted along with it, so a view that shows one before the password
+        /// is supplied has to consult this.
+        pub is_encrypted: bool,
     }
 
     /// An entry as read for a caller about to show it.
@@ -565,19 +571,19 @@ impl Handler {
                 let (metadata, expired) = metadata_from_row(row)?;
 
                 let nonce = row
-                    .get::<_, Option<Vec<_>>>(6)?
+                    .get::<_, Option<Vec<_>>>(7)?
                     .map(|v| XNonce::try_from(v.as_slice()))
                     .transpose()
                     .map_err(|err| {
                         rusqlite::Error::FromSqlConversionFailure(
-                            6,
+                            7,
                             rusqlite::types::Type::Blob,
                             Box::new(err),
                         )
                     })?;
 
                 Ok(read::DatabaseEntry {
-                    data: row.get(5)?,
+                    data: row.get(6)?,
                     metadata,
                     nonce,
                     expired,

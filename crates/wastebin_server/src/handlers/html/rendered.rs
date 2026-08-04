@@ -73,7 +73,11 @@ pub async fn get(
                 page: page.clone(),
                 theme,
                 lang,
-                title: metadata.title.clone(),
+                // The interstitial comes before any password is asked for, and the title is not
+                // encrypted along with the content.
+                title: (!metadata.is_encrypted)
+                    .then(|| metadata.title.clone())
+                    .flatten(),
                 action: FormAction::rendered(&key),
             }
             .into_response());
