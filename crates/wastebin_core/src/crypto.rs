@@ -7,7 +7,11 @@ use rand::RngExt;
 use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
 
-static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
+/// Derivation used for entries sealed before each carried a salt of its own.
+///
+/// Those entries are already in databases, and their key depends on every value here, so this
+/// cannot change without making them unreadable.
+static LEGACY_CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
     variant: argon2::Variant::Argon2i,
     version: argon2::Version::Version13,
     mem_cost: 65536,
@@ -18,6 +22,25 @@ static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
     ad: &[],
     hash_length: 32,
 });
+
+/// Derivation for entries that carry their own salt.
+///
+/// Argon2id rather than Argon2i: RFC 9106 §4 recommends it, and its hybrid addressing is what
+/// resists the tradeoff attacks that Argon2i's data-independent addressing invites.
+static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
+    variant: argon2::Variant::Argon2id,
+    version: argon2::Version::Version13,
+    mem_cost: 65536,
+    time_cost: 10,
+    lanes: 4,
+    thread_mode: argon2::ThreadMode::Parallel,
+    secret: &[],
+    ad: &[],
+    hash_length: 32,
+});
+
+/// Bytes of salt minted for a new entry.
+pub const ENTRY_SALT_LEN: usize = 16;
 
 /// Shortest salt argon2 accepts. A shorter one makes every key derivation fail, so it is rejected
 /// when the [`Salt`] is constructed rather than on the first encrypted paste.
@@ -72,8 +95,66 @@ pub struct Password(Vec<u8>);
 #[derive(Clone)]
 pub struct Salt(Arc<str>);
 
+/// Salt belonging to one entry, stored beside its ciphertext.
+#[derive(Clone, Debug)]
+pub struct EntrySalt(Vec<u8>);
+
+/// How an entry's key is derived.
+///
+/// One salt shared by every entry made a single argon2 evaluation per candidate password testable
+/// against the whole database at once, and gave two pastes with the same password the same key.
+/// New entries carry their own; the ones already stored keep the derivation they were sealed with.
+#[derive(Clone)]
+pub enum Derivation {
+    /// An entry from before per-entry salts: the process-wide salt and the original variant.
+    Legacy(Salt),
+    /// An entry carrying a salt of its own.
+    PerEntry(EntrySalt),
+}
+
 /// Plaintext bytes to be encrypted.
 pub(crate) struct Plaintext(Vec<u8>);
+
+impl EntrySalt {
+    /// Mint a salt for a new entry.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(rand::rng().random::<[u8; ENTRY_SALT_LEN]>().to_vec())
+    }
+
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl TryFrom<Vec<u8>> for EntrySalt {
+    type Error = Error;
+
+    fn try_from(value: Vec<u8>) -> Result<Self, Error> {
+        if value.len() < MIN_SALT_LEN {
+            return Err(Error::SaltTooShort(value.len()));
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl Derivation {
+    fn config(&self) -> &'static argon2::Config<'static> {
+        match self {
+            Self::Legacy(_) => &LEGACY_CONFIG,
+            Self::PerEntry(_) => &CONFIG,
+        }
+    }
+
+    fn salt_bytes(&self) -> &[u8] {
+        match self {
+            Self::Legacy(salt) => salt.0.as_bytes(),
+            Self::PerEntry(salt) => salt.as_bytes(),
+        }
+    }
+}
 
 impl From<Vec<u8>> for Password {
     fn from(value: Vec<u8>) -> Self {
@@ -99,8 +180,8 @@ impl From<Vec<u8>> for Plaintext {
     }
 }
 
-fn cipher_from(password: &[u8], salt: &Salt) -> Result<XChaCha20Poly1305, Error> {
-    let key = argon2::hash_raw(password, salt.0.as_bytes(), &CONFIG)?;
+fn cipher_from(password: &[u8], derivation: &Derivation) -> Result<XChaCha20Poly1305, Error> {
+    let key = argon2::hash_raw(password, derivation.salt_bytes(), derivation.config())?;
     let key = Key::try_from(key.as_slice()).map_err(|_| Error::ChaCha20Poly1305Encrypt)?;
     Ok(XChaCha20Poly1305::new(&key))
 }
@@ -118,12 +199,16 @@ async fn derivation_permit() -> Result<tokio::sync::OwnedSemaphorePermit, Error>
 
 impl Plaintext {
     /// Consume and encrypt plaintext into [`Encrypted`] using `password`.
-    pub async fn encrypt(self, password: Password, salt: Salt) -> Result<Encrypted, Error> {
+    pub async fn encrypt(
+        self,
+        password: Password,
+        derivation: Derivation,
+    ) -> Result<Encrypted, Error> {
         let permit = derivation_permit().await?;
 
         spawn_blocking(move || {
             let _permit = permit;
-            let cipher = cipher_from(&password.0, &salt)?;
+            let cipher = cipher_from(&password.0, &derivation)?;
             let nonce = XNonce::from(rand::rng().random::<[u8; 24]>());
             let ciphertext = cipher
                 .encrypt(&nonce, self.0.as_ref())
@@ -143,12 +228,16 @@ impl Encrypted {
     }
 
     /// Decrypt into bytes using `password`.
-    pub async fn decrypt(self, password: Password, salt: Salt) -> Result<Vec<u8>, Error> {
+    pub async fn decrypt(
+        self,
+        password: Password,
+        derivation: Derivation,
+    ) -> Result<Vec<u8>, Error> {
         let permit = derivation_permit().await?;
 
         spawn_blocking(move || {
             let _permit = permit;
-            let cipher = cipher_from(&password.0, &salt)?;
+            let cipher = cipher_from(&password.0, &derivation)?;
             let plaintext = cipher
                 .decrypt(&self.nonce, self.ciphertext.as_ref())
                 .map_err(|_| Error::ChaCha20Poly1305Decrypt)?;
@@ -168,11 +257,17 @@ mod tests {
         let password = "secret".to_string();
         let plaintext = "encrypt me".to_string();
         let encrypted = Plaintext::from(plaintext.as_bytes().to_vec())
-            .encrypt(Password::from(password.as_bytes().to_vec()), salt.clone())
+            .encrypt(
+                Password::from(password.as_bytes().to_vec()),
+                Derivation::Legacy(salt.clone()),
+            )
             .await
             .unwrap();
         let decrypted = encrypted
-            .decrypt(Password::from(password.as_bytes().to_vec()), salt)
+            .decrypt(
+                Password::from(password.as_bytes().to_vec()),
+                Derivation::Legacy(salt),
+            )
             .await
             .unwrap();
         assert_eq!(decrypted, plaintext.as_bytes());
@@ -203,7 +298,7 @@ mod tests {
 
                 tokio::spawn(async move {
                     Plaintext::from(b"encrypt me".to_vec())
-                        .encrypt(Password::from(b"secret".to_vec()), salt)
+                        .encrypt(Password::from(b"secret".to_vec()), Derivation::Legacy(salt))
                         .await
                 })
             })
@@ -220,13 +315,72 @@ mod tests {
         );
     }
 
+    /// Captured from the scheme that shipped before per-entry salts: one process-wide salt and
+    /// Argon2i. Every paste encrypted by a running instance is sealed exactly like this, so the
+    /// legacy derivation has to keep reproducing the same key byte for byte.
+    #[tokio::test]
+    async fn a_paste_sealed_before_per_entry_salts_still_opens() {
+        fn unhex(s: &str) -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        }
+
+        let ciphertext = unhex("099efe0be8d9b175835af41b5fe908b3ebc34efdebd11047299413bf40");
+        let nonce = unhex("2514a266bf4d6ddf4ac3d02edb795b493a9756b43e81aabf");
+        let nonce = XNonce::try_from(nonce.as_slice()).unwrap();
+        let encrypted = Encrypted::new(ciphertext, nonce);
+
+        let derivation = Derivation::Legacy(Salt::try_from("somesalt".to_string()).unwrap());
+        let decrypted = encrypted
+            .decrypt(Password::from(b"hunter2".to_vec()), derivation)
+            .await
+            .unwrap();
+
+        assert_eq!(decrypted, b"legacy secret");
+    }
+
+    /// The salt exists to make one derivation testable against one entry. Sharing it across every
+    /// paste meant a single argon2 evaluation per candidate password could be checked against all
+    /// of them at once, and two pastes with the same password shared a key.
+    #[tokio::test]
+    async fn two_pastes_with_one_password_do_not_share_a_key() {
+        let sealed = |salt: EntrySalt| async move {
+            Plaintext::from(b"encrypt me".to_vec())
+                .encrypt(
+                    Password::from(b"secret".to_vec()),
+                    Derivation::PerEntry(salt),
+                )
+                .await
+                .unwrap()
+        };
+
+        let first_salt = EntrySalt::generate();
+        let second_salt = EntrySalt::generate();
+        assert_ne!(first_salt.as_bytes(), second_salt.as_bytes());
+
+        let first = sealed(first_salt).await;
+
+        // The key derived for one entry must not open another, even with the right password.
+        assert!(
+            first
+                .decrypt(
+                    Password::from(b"secret".to_vec()),
+                    Derivation::PerEntry(second_salt),
+                )
+                .await
+                .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn different_salts_do_not_interoperate() {
         let password = || Password::from("secret".as_bytes().to_vec());
         let encrypted = Plaintext::from("encrypt me".as_bytes().to_vec())
             .encrypt(
                 password(),
-                Salt::try_from("first-salt".to_string()).unwrap(),
+                Derivation::Legacy(Salt::try_from("first-salt".to_string()).unwrap()),
             )
             .await
             .unwrap();
@@ -235,7 +389,7 @@ mod tests {
             encrypted
                 .decrypt(
                     password(),
-                    Salt::try_from("second-salt".to_string()).unwrap()
+                    Derivation::Legacy(Salt::try_from("second-salt".to_string()).unwrap()),
                 )
                 .await
                 .is_err()

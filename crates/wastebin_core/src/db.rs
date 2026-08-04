@@ -7,7 +7,7 @@ use rusqlite::{Connection, Transaction, params, params_from_iter};
 use rusqlite_migration::{HookError, M, Migrations};
 use tokio::sync::oneshot;
 
-use crate::crypto::{self, Password, Salt};
+use crate::crypto::{self, EntrySalt, Password, Salt};
 use crate::expiration::Expiration;
 use crate::id::Id;
 use read::{DatabaseEntry, ListEntry, Metadata};
@@ -168,7 +168,7 @@ pub enum Open {
 
 /// Module with types for insertion.
 pub mod write {
-    use crate::crypto::{Encrypted, Password, Plaintext, Salt};
+    use crate::crypto::{Derivation, Encrypted, EntrySalt, Password, Plaintext};
     use crate::db::Error;
     use chacha20poly1305::XNonce;
     use std::io::Cursor;
@@ -210,6 +210,8 @@ pub mod write {
         pub data: Vec<u8>,
         /// Nonce for this entry
         pub nonce: Option<XNonce>,
+        /// Salt this entry's key was derived under, if it is encrypted
+        pub salt: Option<EntrySalt>,
     }
 
     impl Entry {
@@ -232,22 +234,25 @@ pub mod write {
     }
 
     impl CompressedEntry {
-        /// Encrypt if password is set.
-        pub async fn encrypt(self, salt: &Salt) -> Result<DatabaseEntry, Error> {
-            let (data, nonce) = if let Some(password) = &self.entry.password {
+        /// Encrypt if password is set, under a salt minted for this entry alone.
+        pub async fn encrypt(self) -> Result<DatabaseEntry, Error> {
+            let (data, nonce, salt) = if let Some(password) = &self.entry.password {
                 let password = Password::from(password.as_bytes().to_vec());
                 let plaintext = Plaintext::from(self.data);
-                let Encrypted { ciphertext, nonce } =
-                    plaintext.encrypt(password, salt.clone()).await?;
-                (ciphertext, Some(nonce))
+                let salt = EntrySalt::generate();
+                let Encrypted { ciphertext, nonce } = plaintext
+                    .encrypt(password, Derivation::PerEntry(salt.clone()))
+                    .await?;
+                (ciphertext, Some(nonce), Some(salt))
             } else {
-                (self.data, None)
+                (self.data, None, None)
             };
 
             Ok(DatabaseEntry {
                 entry: self.entry,
                 data,
                 nonce,
+                salt,
             })
         }
     }
@@ -255,7 +260,7 @@ pub mod write {
 
 /// Module with types for reading from the database.
 pub mod read {
-    use crate::crypto::{Encrypted, Password, Salt};
+    use crate::crypto::{Derivation, Encrypted, EntrySalt, Password, Salt};
     use crate::db::Error;
     use crate::expiration::Expiration;
     use crate::id::Id;
@@ -274,6 +279,9 @@ pub mod read {
         pub expired: bool,
         /// Nonce for this entry
         pub nonce: Option<XNonce>,
+        /// Salt this entry was sealed under. `None` for entries stored before each carried one,
+        /// which are still opened with the process-wide salt they were sealed with.
+        pub salt: Option<EntrySalt>,
     }
 
     /// Potentially decrypted but still compressed entry
@@ -339,11 +347,20 @@ pub mod read {
     }
 
     impl DatabaseEntry {
+        /// Decrypt with the derivation this entry was sealed under.
+        ///
+        /// `legacy_salt` is the process-wide salt, used only for entries stored before each
+        /// carried its own; those are already in databases and cannot be re-keyed in place.
         pub async fn decrypt(
             self,
             password: Option<Password>,
-            salt: &Salt,
+            legacy_salt: &Salt,
         ) -> Result<CompressedReadEntry, Error> {
+            let derivation = match self.salt {
+                Some(salt) => Derivation::PerEntry(salt),
+                None => Derivation::Legacy(legacy_salt.clone()),
+            };
+
             match (self.nonce, password) {
                 (Some(_), None) => Err(Error::NoPassword),
                 (None, None | Some(_)) => Ok(CompressedReadEntry {
@@ -354,12 +371,16 @@ pub mod read {
                     let encrypted = Encrypted::new(self.data, nonce);
                     // A failing AEAD check means the supplied password was wrong; surface that as
                     // an outcome rather than leaking a cipher primitive failure to callers.
-                    let decrypted = encrypted.decrypt(password, salt.clone()).await.map_err(
-                        |err| match err {
-                            crate::crypto::Error::ChaCha20Poly1305Decrypt => Error::WrongPassword,
-                            err => Error::Crypto(err),
-                        },
-                    )?;
+                    let decrypted =
+                        encrypted
+                            .decrypt(password, derivation)
+                            .await
+                            .map_err(|err| match err {
+                                crate::crypto::Error::ChaCha20Poly1305Decrypt => {
+                                    Error::WrongPassword
+                                }
+                                err => Error::Crypto(err),
+                            })?;
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
@@ -445,6 +466,7 @@ impl Handler {
             M::up(include_str!("migrations/0005-drop-text-column.sql")),
             M::up(include_str!("migrations/0006-add-nonce-column.sql")),
             M::up(include_str!("migrations/0007-add-title-column.sql")),
+            M::up(include_str!("migrations/0008-add-salt-column.sql")),
         ]);
 
         migrations.to_latest(&mut conn)?;
@@ -481,10 +503,16 @@ impl Handler {
 
     fn insert(
         &self,
-        write::DatabaseEntry { entry, data, nonce }: write::DatabaseEntry,
+        write::DatabaseEntry {
+            entry,
+            data,
+            nonce,
+            salt,
+        }: write::DatabaseEntry,
     ) -> Result<(Id, write::Entry), Error> {
         let mut counter = 0;
         let nonce = nonce.as_ref().map(|n| n.as_slice());
+        let salt = salt.as_ref().map(EntrySalt::as_bytes);
         // `datetime('now', NULL)` yields NULL, i.e. no expiration.
         let expires = entry.expires.map(|expires| format!("{expires} seconds"));
 
@@ -492,7 +520,7 @@ impl Handler {
             let id = Id::rand();
 
             let result = self.conn.execute(
-                "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7)",
+                "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title, salt) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7, ?8)",
                 params![
                     id.to_i64(),
                     entry.uid,
@@ -501,6 +529,7 @@ impl Handler {
                     nonce,
                     expires,
                     entry.title,
+                    salt,
                 ],
             );
 
@@ -544,7 +573,7 @@ impl Handler {
             concat!(
                 "SELECT ",
                 metadata_columns!(),
-                ", data, nonce FROM entries WHERE id=?1"
+                ", data, nonce, salt FROM entries WHERE id=?1"
             ),
             params![id.to_i64()],
             |row| {
@@ -562,11 +591,24 @@ impl Handler {
                         )
                     })?;
 
+                let salt = row
+                    .get::<_, Option<Vec<u8>>>(8)?
+                    .map(EntrySalt::try_from)
+                    .transpose()
+                    .map_err(|err| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            8,
+                            rusqlite::types::Type::Blob,
+                            Box::new(err),
+                        )
+                    })?;
+
                 Ok(read::DatabaseEntry {
                     data: row.get(6)?,
                     metadata,
                     nonce,
                     expired,
+                    salt,
                 })
             },
         )?;
@@ -709,7 +751,7 @@ impl Database {
     /// Insert `entry` under a new random id into the database and optionally set owner to `uid`.
     /// Returns the id of the new entry on success.
     pub async fn insert(&self, entry: write::Entry) -> Result<(Id, write::Entry), Error> {
-        let entry = entry.compress().await?.encrypt(&self.salt).await?;
+        let entry = entry.compress().await?.encrypt().await?;
 
         self.call(|result| Command::Insert { entry, result }).await
     }
