@@ -124,25 +124,22 @@ pub async fn get(
             .into_response());
         }
 
-        let (data, is_available) = match db.get(key.id, password).await {
-            Ok(Entry::Regular(data)) => (data, true),
-            Ok(Entry::Burned(data)) => (data, false),
-            Err(db::Error::NoPassword) => return Ok(password_input(page, theme, lang, id)),
-            Err(err) => return Err(err.into()),
-        };
+        // An entry is only ever cached while it was available and unencrypted, so a hit can be
+        // served from metadata alone — no need to read and decompress the body just to drop it.
+        let cached = no_password.then(|| cache.get(&key, Mode::Source)).flatten();
 
-        let Data { text, metadata } = data;
-        let Metadata {
-            uid: owner_uid,
-            title,
-            expiration,
-            ..
-        } = metadata;
-
-        let html = if let Some(html) = cache.get(&key, Mode::Source) {
+        let (html, is_available, metadata) = if let Some(html) = cached {
             tracing::trace!(?key, "found cached item");
-            html
+            (html, true, metadata)
         } else {
+            let (data, is_available) = match db.get(key.id, password).await {
+                Ok(Entry::Regular(data)) => (data, true),
+                Ok(Entry::Burned(data)) => (data, false),
+                Err(db::Error::NoPassword) => return Ok(password_input(page, theme, lang, id)),
+                Err(err) => return Err(err.into()),
+            };
+
+            let Data { text, metadata } = data;
             let ext = key.ext.clone();
             let highlighter = highlighter.clone();
             let html: Arc<str> =
@@ -156,8 +153,15 @@ pub async fn get(
                 cache.put(&key, Mode::Source, Arc::clone(&html));
             }
 
-            html
+            (html, is_available, metadata)
         };
+
+        let Metadata {
+            uid: owner_uid,
+            title,
+            expiration,
+            ..
+        } = metadata;
 
         let paste = Paste {
             page: page.clone(),
@@ -180,6 +184,7 @@ pub async fn get(
 
 #[cfg(test)]
 mod tests {
+    use crate::handlers::insert::form::Entry;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
 
@@ -188,6 +193,65 @@ mod tests {
         let client = Client::new(StoreCookies(false)).await;
 
         let res = client.get("/000000").send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    /// The first view populates the render cache; once the paste expires the cached render must
+    /// not be served in its place.
+    #[tokio::test]
+    async fn expired_paste_is_not_served_from_cache() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("cache-me-then-expire"),
+            expires: Some(String::from("1")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.text().await?.contains("cache-me-then-expire"));
+
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    /// Deleting a paste leaves its render in the cache, so the view must decide availability from
+    /// the database rather than from a cache hit.
+    #[tokio::test]
+    async fn deleted_paste_is_not_served_from_cache() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+        let data = Entry {
+            text: String::from("cache-me-then-delete"),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        // The first view fills the cache, the second is served from it.
+        for _ in 0..2 {
+            let res = client.get(&location).send().await?;
+            assert_eq!(res.status(), StatusCode::OK);
+            assert!(res.text().await?.contains("cache-me-then-delete"));
+        }
+
+        let res = client.delete(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        // The raw view never consults the cache, but must agree.
+        let res = client.get(&format!("/raw{location}")).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())

@@ -68,7 +68,7 @@ enum Command {
     },
     GetMetadata {
         id: Id,
-        result: oneshot::Sender<Result<Metadata, Error>>,
+        result: oneshot::Sender<Result<(Metadata, bool), Error>>,
     },
     Delete {
         id: Id,
@@ -500,9 +500,10 @@ impl Handler {
         }
     }
 
-    fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
+    /// Read a row's metadata along with whether it has already expired.
+    fn get_metadata(&self, id: Id) -> Result<(Metadata, bool), Error> {
         let metadata = self.conn.query_row(
-            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading FROM entries WHERE id=?1",
+            "SELECT uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, expires < datetime('now') FROM entries WHERE id=?1",
             params![id.to_i64()],
             |row| {
                 let expiration = row.get::<_, Option<i64>>(2)?
@@ -510,12 +511,12 @@ impl Handler {
                     .and_then(|secs| u64::try_from(secs).ok())
                     .map(|secs| Expiration { duration: Duration::from_secs(secs), default: false });
 
-                Ok(read::Metadata {
+                Ok((read::Metadata {
                     uid: row.get(0)?,
                     title: row.get::<_, Option<String>>(1)?,
                     expiration,
                     must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
-                })
+                }, row.get::<_, Option<bool>>(4)?.unwrap_or(false)))
             }
         )?;
 
@@ -523,7 +524,7 @@ impl Handler {
     }
 
     fn get(&self, id: Id) -> Result<DatabaseEntry, Error> {
-        let metadata = self.get_metadata(id)?;
+        let (metadata, _) = self.get_metadata(id)?;
         let entry = self.conn.query_row(
             "SELECT data, burn_after_reading, nonce, expires < datetime('now') FROM entries WHERE id=?1",
             params![id.to_i64()],
@@ -690,13 +691,24 @@ impl Database {
     }
 
     /// Get metadata of a paste.
+    ///
+    /// Expired entries are deleted and reported as [`Error::NotFound`], matching [`Self::get`],
+    /// so callers can rely on metadata alone to decide a paste is still servable.
     pub async fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
         let (result, command_result) = oneshot::channel();
         self.sender
             .send(Command::GetMetadata { id, result })
             .await
             .map_err(|_| Error::SendError)?;
-        command_result.await?
+
+        let (metadata, expired) = command_result.await??;
+
+        if expired {
+            self.delete(id).await?;
+            return Err(Error::NotFound);
+        }
+
+        Ok(metadata)
     }
 
     /// Delete paste with `id`.
