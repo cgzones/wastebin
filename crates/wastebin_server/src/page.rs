@@ -43,6 +43,33 @@ pub(crate) struct Page {
     pub expirations: Vec<ExpirationChoice>,
     pub max_body_size: usize,
     pub max_expiration: Option<NonZeroU32>,
+    /// The index form's language `<option>` list, already escaped.
+    ///
+    /// It depends only on the syntax set, which is fixed at startup, so re-rendering and
+    /// re-escaping its ~200 entries on every request to the most-visited page is pure waste.
+    pub language_options: String,
+}
+
+/// Render the index form's language `<option>` list.
+///
+/// Escaped with the same characters askama's default escaper covers, since the result is emitted
+/// through `|safe`.
+fn language_options(highlighter: &wastebin_highlight::Highlighter) -> String {
+    let mut out = String::new();
+
+    for syntax in highlighter.syntaxes() {
+        let Some(extension) = syntax.extensions.first() else {
+            continue;
+        };
+
+        out.push_str("\n            <option value=\"");
+        wastebin_highlight::escape(extension, &mut out);
+        out.push_str("\">");
+        wastebin_highlight::escape(syntax.name, &mut out);
+        out.push_str("</option>");
+    }
+
+    out
 }
 
 impl Page {
@@ -55,6 +82,7 @@ impl Page {
         expirations: ExpirationSet,
         max_body_size: usize,
         max_expiration: Option<NonZeroU32>,
+        highlighter: &wastebin_highlight::Highlighter,
     ) -> Self {
         let assets = Assets::new(theme);
         let (values, default) = expirations.into_parts();
@@ -74,6 +102,7 @@ impl Page {
             expirations,
             max_body_size,
             max_expiration,
+            language_options: language_options(highlighter),
         }
     }
 }
@@ -144,6 +173,7 @@ mod tests {
             expirations.parse::<ExpirationSet>().unwrap(),
             1024,
             None,
+            &wastebin_highlight::Highlighter::default(),
         )
     }
 

@@ -424,6 +424,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         expirations,
         max_body_size,
         max_expiration,
+        &highlighter,
     ));
     let ratelimit_insert = ratelimit_insert.map(make_ratelimiter);
     let ratelimit_delete = ratelimit_delete.map(make_ratelimiter);
