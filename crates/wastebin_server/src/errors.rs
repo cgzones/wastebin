@@ -21,6 +21,8 @@ pub(crate) enum Error {
     Id(#[from] id::Error),
     #[error("malformed form data")]
     MalformedForm,
+    #[error("extension names no known syntax")]
+    InvalidExtension,
     #[error("payload exceeded limit")]
     PayloadTooLarge,
     #[error("unsupported media type")]
@@ -57,6 +59,7 @@ impl Error {
             Error::Database(db::Error::WrongPassword) => "error.wrong_password",
             Error::Database(db::Error::NoPassword) => "error.no_password",
             Error::Id(_) | Error::UrlParsing(_) => "error.invalid_id",
+            Error::InvalidExtension => "error.invalid_extension",
             Error::RateLimit => "error.rate_limit",
             Error::TooLongExpires => "error.too_long_expires",
             Error::MalformedForm => "error.malformed_form",
@@ -109,6 +112,7 @@ impl From<&Error> for StatusCode {
             Error::Database(db::Error::NoPassword)
             | Error::Id(_)
             | Error::UrlParsing(_)
+            | Error::InvalidExtension
             | Error::TooLongExpires
             | Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
                 StatusCode::BAD_REQUEST
