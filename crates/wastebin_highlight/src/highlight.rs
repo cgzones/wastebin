@@ -47,6 +47,47 @@ const HIGHLIGHT_TIME_BUDGET: Duration = Duration::from_secs(2);
 /// Name syntect gives the Markdown syntax.
 const MARKDOWN_SYNTAX_NAME: &str = "Markdown";
 
+/// What both emitters are allowed to spend in the syntax engine, and when they stop.
+///
+/// Held as one type so the two loops cannot drift apart on the policy: they answer the same
+/// question per line and latch the same way once the deadline passes.
+struct Budget {
+    started: Instant,
+    /// Set once the syntax engine has had its budget; the remaining lines are escaped only.
+    plain: bool,
+    lines: usize,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self {
+            started: Instant::now(),
+            plain: false,
+            lines: 0,
+        }
+    }
+
+    /// Return `true` if `line` goes into the page escaped rather than highlighted.
+    fn skips(&self, line: &str) -> bool {
+        self.plain || line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF
+    }
+
+    /// Account for a line just emitted.
+    fn tick(&mut self) {
+        self.lines += 1;
+
+        // Reading the clock costs about as much as escaping a short line does, and on a large
+        // plain-text paste that was a tenth of the whole render, so consult it every few lines
+        // instead. The cutoff above bounds what one line may cost, so the overshoot is bounded too.
+        if !self.plain
+            && self.lines.is_multiple_of(16)
+            && self.started.elapsed() > HIGHLIGHT_TIME_BUDGET
+        {
+            self.plain = true;
+        }
+    }
+}
+
 /// Rendered HTML, shared so that cloning is a refcount bump rather than a copy of the whole
 /// document.
 #[derive(Clone)]
@@ -424,13 +465,10 @@ impl Highlighter {
 
         html.push_str(r#"</div><div class="src-code"><code>"#);
 
-        let started = Instant::now();
-        // Set once the syntax engine has had its budget; the remaining lines are escaped only.
-        let mut plain_from_here = false;
+        let mut budget = Budget::new();
 
         for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
-            let (formatted, delta) = if plain_from_here || line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF
-            {
+            let (formatted, delta) = if budget.skips(line) {
                 // Too long, or past the time budget, to highlight — but it still goes into the
                 // page verbatim otherwise.
                 let mut escaped = String::with_capacity(line.len());
@@ -476,9 +514,7 @@ impl Highlighter {
                 return Err(Error::TooLarge(MAX_RENDERED_BYTES));
             }
 
-            if !plain_from_here && started.elapsed() > HIGHLIGHT_TIME_BUDGET {
-                plain_from_here = true;
-            }
+            budget.tick();
         }
 
         html.push_str("</code></div>");
@@ -504,12 +540,10 @@ impl Highlighter {
         let mut inner = String::new();
         let mut open_spans: isize = 0;
 
-        let started = Instant::now();
-        // Set once the syntax engine has had its budget; the remaining lines are escaped only.
-        let mut plain_from_here = false;
+        let mut budget = Budget::new();
 
         for line in LinesWithEndings::from(text) {
-            if plain_from_here || line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
+            if budget.skips(line) {
                 escape(line, &mut inner);
             } else {
                 let parsed = parse_state.parse_line(line, &self.syntax_set)?;
@@ -528,9 +562,7 @@ impl Highlighter {
                 return Err(Error::TooLarge(MAX_RENDERED_BYTES));
             }
 
-            if !plain_from_here && started.elapsed() > HIGHLIGHT_TIME_BUDGET {
-                plain_from_here = true;
-            }
+            budget.tick();
         }
 
         // Spans may still be open across the end of the block, or across the point the budget ran
