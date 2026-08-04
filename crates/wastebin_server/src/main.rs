@@ -20,7 +20,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SERVER, VARY,
+    ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SERVER, VARY,
     X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
@@ -219,6 +219,40 @@ async fn handle_service_errors(
     html::make_error(error, page, theme, lang, accepts).into_response()
 }
 
+/// Answer `OPTIONS` from the `Allow` list the router already computes.
+///
+/// The routes only register the methods they serve, so axum rejects `OPTIONS` with a 405 that
+/// nonetheless names every method allowed there. Turning that into the 204 the method is defined
+/// to return costs nothing and keeps the list in one place.
+async fn answer_options(req: Request, next: Next) -> Response {
+    let asked = req.method() == http::Method::OPTIONS;
+    let mut response = next.run(req).await;
+
+    if !asked || response.status() != StatusCode::METHOD_NOT_ALLOWED {
+        return response;
+    }
+
+    let Some(allowed) = response.headers().get(ALLOW).and_then(|v| v.to_str().ok()) else {
+        return response;
+    };
+
+    // The router never lists OPTIONS, since it does not route it — but this handler serves it.
+    let Ok(allow) = HeaderValue::try_from(format!("{allowed},OPTIONS")) else {
+        return response;
+    };
+
+    *response.status_mut() = StatusCode::NO_CONTENT;
+    *response.body_mut() = axum::body::Body::empty();
+
+    let headers = response.headers_mut();
+    headers.insert(ALLOW, allow);
+    // A 204 carries no representation, so neither header may describe one.
+    headers.remove(CONTENT_TYPE);
+    headers.remove(http::header::CONTENT_LENGTH);
+
+    response
+}
+
 /// Fallback for a path no route matched.
 ///
 /// Without one, axum answers a bare 404 with an empty body, which is the only failure on the site
@@ -283,7 +317,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         router = router.route(&route, get(move || std::future::ready(asset.response())));
     }
 
-    router
+    let app = router
         .route("/", get(html::index::get).post(insert::api::post))
         .route("/robots.txt", get(robots::get))
         .route("/theme", get(theme::get))
@@ -316,7 +350,14 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
                 .layer(from_fn_with_state(state.clone(), handle_service_errors))
                 .layer(from_fn(security_headers_layer)),
         )
-        .with_state(state)
+        .with_state(state);
+
+    // Wrapping the finished router, rather than layering onto it, is what lets `answer_options`
+    // read the `Allow` header: axum attaches that as the inner router's response completes, after
+    // any middleware layered onto the routes themselves has already run.
+    Router::new()
+        .fallback_service(app)
+        .layer(from_fn(answer_options))
 }
 
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
@@ -465,6 +506,47 @@ mod tests {
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
         }
+
+        Ok(())
+    }
+
+    /// `OPTIONS` is defined to report what a resource accepts, not to be refused by it.
+    #[tokio::test]
+    async fn options_reports_the_allowed_methods() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for (path, expected) in [("/", "GET,HEAD,POST"), ("/robots.txt", "GET,HEAD")] {
+            let res = client
+                .request(reqwest::Method::OPTIONS, path)
+                .send()
+                .await?;
+
+            assert_eq!(res.status(), http::StatusCode::NO_CONTENT, "path {path}");
+
+            let allow = res
+                .headers()
+                .get(http::header::ALLOW)
+                .expect("allow header")
+                .to_str()?;
+
+            assert_eq!(allow, format!("{expected},OPTIONS"), "path {path}");
+            assert!(res.text().await?.is_empty(), "path {path}");
+        }
+
+        Ok(())
+    }
+
+    /// Only `OPTIONS` is answered this way — a genuinely wrong method is still refused.
+    #[tokio::test]
+    async fn other_methods_are_still_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .request(reqwest::Method::PUT, "/robots.txt")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), http::StatusCode::METHOD_NOT_ALLOWED);
 
         Ok(())
     }
