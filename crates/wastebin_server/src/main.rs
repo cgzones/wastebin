@@ -126,8 +126,18 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         CSP_STRICT
     };
 
-    let headers: [(HeaderName, HeaderValue); 7] = [
+    // Every feature wastebin never uses. `clipboard-write` is deliberately absent: the copy
+    // buttons need it and its default allowlist is already `self`.
+    const PERMISSIONS_POLICY: HeaderValue = HeaderValue::from_static(
+        "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()",
+    );
+
+    let headers: [(HeaderName, HeaderValue); 8] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
+        (
+            HeaderName::from_static("permissions-policy"),
+            PERMISSIONS_POLICY,
+        ),
         (CONTENT_SECURITY_POLICY, csp),
         (REFERRER_POLICY, HeaderValue::from_static("same-origin")),
         (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
@@ -384,6 +394,30 @@ mod tests {
         // The CSP says `frame-ancestors 'none'`; the legacy header must not advertise a weaker
         // policy to consumers that only understand it.
         assert_eq!(res.headers().get(X_FRAME_OPTIONS).unwrap(), "DENY");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn permissions_policy_disables_unused_features()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let res = client.get("/").send().await?;
+
+        let policy = res
+            .headers()
+            .get("permissions-policy")
+            .expect("permissions-policy header")
+            .to_str()?
+            .to_owned();
+
+        for feature in ["camera", "microphone", "geolocation", "payment", "usb"] {
+            assert!(policy.contains(&format!("{feature}=()")), "got: {policy}");
+        }
+
+        // The copy buttons call `navigator.clipboard.writeText`, whose default allowlist is
+        // already `self` — denying it here would break them.
+        assert!(!policy.contains("clipboard"), "got: {policy}");
 
         Ok(())
     }
