@@ -246,7 +246,7 @@ impl Highlighter {
     /// Highlight a fenced code block. `token` is the info string (e.g. `rust`, `py`); unknown or
     /// empty tokens fall back to plain text. Unlike [`Highlighter::highlight`], the output is a
     /// compact `<pre><code>` without line numbers, suitable for embedding into rendered Markdown.
-    pub fn highlight_code_block(&self, text: &str, token: &str) -> Result<String, Error> {
+    pub(crate) fn highlight_code_block(&self, text: &str, token: &str) -> Result<String, Error> {
         let syntax = self
             .syntax_set
             .find_syntax_by_token(token)
@@ -292,8 +292,7 @@ impl Highlighter {
 impl Html {
     /// Wrap an already-HTML string. Callers are responsible for ensuring the content is safe to
     /// insert into a page (i.e. produced by a trusted renderer).
-    #[must_use]
-    pub fn new(html: String) -> Self {
+    pub(crate) fn new(html: String) -> Self {
         Self(html)
     }
 
