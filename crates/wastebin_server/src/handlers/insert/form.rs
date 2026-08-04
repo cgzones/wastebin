@@ -6,6 +6,7 @@ use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
+use crate::cache::Key;
 use crate::handlers::extract::{Theme, Uids};
 use crate::handlers::html::make_error;
 use crate::handlers::uid_cookie;
@@ -78,8 +79,13 @@ pub async fn post(
         let (id, entry) = common_insert(&appstate, entry).await?;
 
         let url = {
-            let url_path = id.to_url_path(&entry);
-            if entry.burn_after_reading.unwrap_or(false) {
+            let burn_after_reading = entry.burn_after_reading.unwrap_or(false);
+            let url_path = Key {
+                id,
+                ext: entry.extension,
+            };
+
+            if burn_after_reading {
                 format!("/burn/{url_path}")
             } else {
                 format!("/{url_path}")

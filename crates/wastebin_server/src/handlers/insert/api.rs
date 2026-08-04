@@ -71,7 +71,13 @@ pub async fn post(
     entry.uid = Some(uid);
 
     let (id, entry) = common_insert(&appstate, entry).await?;
-    let path = format!("/{}", id.to_url_path(&entry));
+    let path = format!(
+        "/{}",
+        crate::cache::Key {
+            id,
+            ext: entry.extension,
+        }
+    );
     let owner = sign_owner_token(&key, uid);
 
     Ok(Json::from(RedirectResponse { path, owner }))

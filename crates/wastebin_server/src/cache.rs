@@ -103,4 +103,19 @@ mod tests {
         assert!(Key::from_str("foo").is_err());
         assert!(Key::from_str("bar.rs").is_err());
     }
+
+    #[test]
+    fn cache_key_url_path() {
+        let key = Key {
+            id: Id::from(0xffff_ffff_u32),
+            ext: Some("txt".to_string()),
+        };
+        assert_eq!(key.to_string(), "+++++d.txt");
+
+        let key = Key {
+            id: Id::from(0xffff_ffff_u32),
+            ext: None,
+        };
+        assert_eq!(key.to_string(), "+++++d");
+    }
 }
