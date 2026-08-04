@@ -51,31 +51,26 @@ impl Default for Highlighter {
 }
 
 /// Escape HTML tags in `s` and write output to `buf`.
-fn escape(s: &str, buf: &mut String) -> std::fmt::Result {
+fn escape(s: &str, buf: &mut String) {
     // Because the internet is always right, turns out there's not that many
     // characters to escape: http://stackoverflow.com/questions/7381974
-    let pile_o_bits = s;
     let mut last = 0;
     for (i, ch) in s.bytes().enumerate() {
-        let escaping = match ch as char {
-            '>' => "&gt;",
-            '<' => "&lt;",
-            '&' => "&amp;",
-            '\'' => "&#39;",
-            '"' => "&quot;",
+        let escaping = match ch {
+            b'>' => "&gt;",
+            b'<' => "&lt;",
+            b'&' => "&amp;",
+            b'\'' => "&#39;",
+            b'"' => "&quot;",
             _ => continue,
         };
 
-        buf.write_str(&pile_o_bits[last..i])?;
-        buf.write_str(escaping)?;
+        buf.push_str(&s[last..i]);
+        buf.push_str(escaping);
         last = i + 1;
     }
 
-    if last < s.len() {
-        buf.write_str(&pile_o_bits[last..])?;
-    }
-
-    Ok(())
+    buf.push_str(&s[last..]);
 }
 
 /// Transform `scope` atoms to CSS style classes and write output to `s`.
@@ -148,11 +143,11 @@ fn line_tokens_to_classed_spans_md(
 
             if handling_link {
                 // Insert href and close attribute ...
-                escape(&line[cur_index..i], &mut s)?;
+                escape(&line[cur_index..i], &mut s);
                 s.push_str(r#"">"#);
             }
 
-            escape(&line[cur_index..i], &mut s)?;
+            escape(&line[cur_index..i], &mut s);
 
             cur_index = i;
         }
@@ -185,7 +180,7 @@ fn line_tokens_to_classed_spans_md(
             }
         })?;
     }
-    escape(&line[cur_index..line.len()], &mut s)?;
+    escape(&line[cur_index..line.len()], &mut s);
     Ok((s, span_delta))
 }
 
@@ -221,7 +216,7 @@ impl Highlighter {
         for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
             let (formatted, delta) = if line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
                 let mut escaped = String::with_capacity(line.len());
-                escape(line, &mut escaped).map_err(|_| Error::Escape)?;
+                escape(line, &mut escaped);
                 (escaped, 0)
             } else {
                 let parsed = parse_state.parse_line(line, &self.syntax_set)?;
