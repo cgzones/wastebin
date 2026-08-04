@@ -143,10 +143,6 @@ pub async fn get(
             == Some("1");
         let no_password = password.is_none();
 
-        if !no_password {
-            PasswordRatelimit::from_ref(&appstate).check()?;
-        }
-
         // This route is also every single-segment path no other route claimed, so a value that is
         // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
         // "that is not a valid paste identifier" described a paste the visitor never asked for.
@@ -158,6 +154,12 @@ pub async fn get(
             Ok(metadata) => metadata,
             Err(err) => return Err(err.into()),
         };
+
+        // Only an attempt that reaches argon2 is worth a token; see `raw::get`. The metadata read
+        // above already settled whether this paste can derive anything.
+        if !no_password && metadata.is_encrypted {
+            PasswordRatelimit::from_ref(&appstate).check()?;
+        }
 
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {

@@ -30,7 +30,8 @@ pub async fn get(
         let key: Key = id.parse()?;
         let password = password.map(|Password(password)| password);
 
-        if password.is_some() {
+        // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
+        if password.is_some() && db.get_metadata(key.id).await?.is_encrypted {
             ratelimit.check()?;
         }
 

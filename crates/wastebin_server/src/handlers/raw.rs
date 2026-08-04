@@ -26,7 +26,10 @@ pub async fn get(
         let password = password.map(|Password(password)| password);
         let key: Key = id.parse()?;
 
-        if password.is_some() {
+        // Only an attempt that reaches argon2 is worth a token. The bucket is a single
+        // process-wide one with no refund, so letting a password for a missing or unencrypted
+        // paste spend one let anyone lock every user out of every encrypted paste for free.
+        if password.is_some() && db.get_metadata(key.id).await?.is_encrypted {
             ratelimit.check()?;
         }
 
@@ -93,6 +96,73 @@ mod tests {
         // A read carrying no password never touches the bucket.
         let none = client.get(&raw).send().await?;
         assert_eq!(none.status(), StatusCode::OK, "prompt should still render");
+
+        Ok(())
+    }
+
+    /// The bucket is a single process-wide one, so a token spent on a request that never derives
+    /// a key is a token taken from every other user. A password sent for a paste that does not
+    /// exist — or one that is not encrypted — costs the server nothing and must cost no token,
+    /// or anyone can lock the whole instance out of every encrypted paste for free.
+    #[tokio::test]
+    async fn a_password_for_no_derivation_keeps_its_token() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let limiter = std::sync::Arc::new(
+            ratelimit::Ratelimiter::builder(1)
+                .max_tokens(1)
+                .initial_available(1)
+                .build()?,
+        );
+        let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
+
+        let secret = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "SECRETPAYLOAD".to_string(),
+                password: Some("hunter2".to_string()),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let plain = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "public".to_string(),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        // Neither of these can reach argon2, so neither may spend the only token.
+        for _ in 0..5 {
+            let res = client
+                .get("/raw/aaaaaa")
+                .header("wastebin-password", "wrong")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "unknown id");
+
+            let res = client
+                .get(&format!("/raw{}", plain.path))
+                .header("wastebin-password", "wrong")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::OK, "unencrypted paste");
+        }
+
+        // The token is still there for the one attempt that does derive a key.
+        let res = client
+            .get(&format!("/raw{}", secret.path))
+            .header("wastebin-password", "hunter2")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().await?, "SECRETPAYLOAD");
 
         Ok(())
     }

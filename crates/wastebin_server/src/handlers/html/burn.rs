@@ -204,8 +204,8 @@ mod tests {
     /// carrying `?confirm_burn=1` skipped the interstitial and destroyed the paste. Anything that
     /// merely follows a URL (an `<img>`, a prefetch, a link unfurler) could burn it.
     #[tokio::test]
-    async fn burn_is_not_confirmed_from_the_query_string()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn burn_is_not_confirmed_from_the_query_string() -> Result<(), Box<dyn std::error::Error>>
+    {
         let client = Client::new(StoreCookies(false)).await;
         let data = Entry {
             text: String::from("secret-body-xyz"),
