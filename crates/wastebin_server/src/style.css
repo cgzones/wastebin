@@ -927,6 +927,11 @@ table {
   width: 16rem;
 }
 
+/* The shared fragment paints the quiet zone white; this page tints it to match its surround. */
+.qr-container svg rect {
+  fill: #fafafa;
+}
+
 #overlay {
   position: fixed;
   display: none;
