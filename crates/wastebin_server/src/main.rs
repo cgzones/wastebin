@@ -772,6 +772,45 @@ mod tests {
         Ok(())
     }
 
+    /// Every template that ships a `<button>`, so a new one cannot quietly default to `submit`.
+    const TEMPLATES: [(&str, &str); 7] = [
+        ("index.html", include_str!("../templates/index.html")),
+        ("paste.html", include_str!("../templates/paste.html")),
+        (
+            "encrypted.html",
+            include_str!("../templates/encrypted.html"),
+        ),
+        (
+            "burn-confirmation.html",
+            include_str!("../templates/burn-confirmation.html"),
+        ),
+        ("burn.html", include_str!("../templates/burn.html")),
+        ("error.html", include_str!("../templates/error.html")),
+        (
+            "theme-switcher.html",
+            include_str!("../templates/theme-switcher.html"),
+        ),
+    ];
+
+    /// A `<button>` with no `type` submits the form it sits in. The copy button was the one that
+    /// left it out; it happens to sit outside the delete form it shares a nav group with, so the
+    /// omission cost nothing until someone moved either of them.
+    #[test]
+    fn shipped_buttons_declare_their_type() {
+        for (name, source) in TEMPLATES {
+            for (offset, _) in source.match_indices("<button") {
+                let tag = &source[offset..];
+                let end = tag.find('>').expect("a closed button tag");
+
+                assert!(
+                    tag[..end].contains("type=\""),
+                    "{name} has a button without a type: {}",
+                    &tag[..end]
+                );
+            }
+        }
+    }
+
     #[test]
     fn shipped_scripts_use_no_trusted_types_sinks() {
         const SCRIPTS: [(&str, &str); 4] = [
