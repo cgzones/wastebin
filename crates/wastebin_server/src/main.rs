@@ -249,7 +249,7 @@ async fn answer_options(req: Request, next: Next) -> Response {
     let asked = req.method() == http::Method::OPTIONS;
     let mut response = next.run(req).await;
 
-    if !asked || response.status() != StatusCode::METHOD_NOT_ALLOWED {
+    if response.status() != StatusCode::METHOD_NOT_ALLOWED {
         return response;
     }
 
@@ -262,12 +262,20 @@ async fn answer_options(req: Request, next: Next) -> Response {
         return response;
     };
 
+    // `Allow` names what the resource supports, so it cannot depend on which method asked. Naming
+    // OPTIONS only in the answer to OPTIONS left a 405 telling the same client, about the same
+    // resource, that a method it had just been served did not exist.
+    response.headers_mut().insert(ALLOW, allow);
+
+    if !asked {
+        return response;
+    }
+
     *response.status_mut() = StatusCode::NO_CONTENT;
     *response.body_mut() = axum::body::Body::empty();
 
-    let headers = response.headers_mut();
-    headers.insert(ALLOW, allow);
     // A 204 carries no representation, so neither header may describe one.
+    let headers = response.headers_mut();
     headers.remove(CONTENT_TYPE);
     headers.remove(http::header::CONTENT_LENGTH);
 
@@ -747,7 +755,10 @@ mod tests {
 
         let res = client.get("/new").send().await?;
         assert_eq!(res.status(), http::StatusCode::METHOD_NOT_ALLOWED);
-        assert_eq!(res.headers().get(http::header::ALLOW).unwrap(), "POST");
+        assert_eq!(
+            res.headers().get(http::header::ALLOW).unwrap(),
+            "POST,OPTIONS"
+        );
         assert_eq!(
             res.headers().get(http::header::CONTENT_TYPE).unwrap(),
             "text/html; charset=utf-8"
@@ -772,6 +783,44 @@ mod tests {
             res.headers().get(http::header::ALLOW).unwrap(),
             "POST,OPTIONS"
         );
+
+        Ok(())
+    }
+
+    /// `Allow` describes the target resource, not the request that happened to reach it, so the
+    /// 405 and the 204 have to name the same set. OPTIONS used to be appended only on the way out
+    /// of an OPTIONS request, leaving the 405 disowning a method the very next request was served.
+    #[tokio::test]
+    async fn allow_agrees_between_405_and_options() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in ["/", "/new", "/theme", "/robots.txt", "/aaaaaaaaaaa"] {
+            let rejected = client.request(http::Method::PUT, path).send().await?;
+            assert_eq!(
+                rejected.status(),
+                http::StatusCode::METHOD_NOT_ALLOWED,
+                "path {path}"
+            );
+
+            let offered = client.request(http::Method::OPTIONS, path).send().await?;
+            assert_eq!(
+                offered.status(),
+                http::StatusCode::NO_CONTENT,
+                "path {path}"
+            );
+
+            let from_405 = rejected.headers().get(http::header::ALLOW);
+            let from_options = offered.headers().get(http::header::ALLOW);
+
+            assert_eq!(from_405, from_options, "path {path}");
+            assert!(
+                from_405
+                    .expect("allow header")
+                    .to_str()?
+                    .contains("OPTIONS"),
+                "path {path} does not name the method it just served"
+            );
+        }
 
         Ok(())
     }
