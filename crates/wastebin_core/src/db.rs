@@ -321,6 +321,8 @@ pub mod read {
         pub title: Option<String>,
         /// If entry is encrypted
         pub is_encrypted: bool,
+        /// If entry is deleted once it has been read
+        pub is_burn_after_reading: bool,
         /// Expiration if set
         pub expiration: Option<String>,
         /// If entry is expired
@@ -625,14 +627,17 @@ impl Handler {
     fn list(&self) -> Result<Vec<ListEntry>, Error> {
         let entries = self
             .conn
-            .prepare("SELECT id, title, nonce, expires, expires < datetime('now') FROM entries")?
+            .prepare(
+                "SELECT id, title, nonce, burn_after_reading, expires, expires < datetime('now') FROM entries",
+            )?
             .query_map([], |row| {
                 Ok(ListEntry {
                     id: Id::from(row.get::<_, i64>(0)?),
                     title: row.get(1)?,
                     is_encrypted: row.get::<_, Option<Vec<u8>>>(2)?.is_some(),
-                    expiration: row.get(3)?,
-                    is_expired: row.get::<_, Option<bool>>(4)?.unwrap_or_default(),
+                    is_burn_after_reading: row.get::<_, Option<bool>>(3)?.unwrap_or_default(),
+                    expiration: row.get(4)?,
+                    is_expired: row.get::<_, Option<bool>>(5)?.unwrap_or_default(),
                 })
             })?
             .collect::<Result<_, _>>()?;
@@ -801,6 +806,36 @@ mod tests {
         let (db, handler) = Database::new(Open::Memory, Salt::try_from("testsalt".to_string())?)?;
         tokio::spawn(handler);
         Ok(db)
+    }
+
+    /// Listing is the only view an operator has of the database, and a paste that disappears on
+    /// first read used to look exactly like one that stays.
+    #[tokio::test]
+    async fn list_reports_burn_after_reading() -> Result<(), Box<dyn std::error::Error>> {
+        let db = new_db()?;
+
+        db.insert(write::Entry {
+            text: "stays".to_string(),
+            ..Default::default()
+        })
+        .await?;
+        db.insert(write::Entry {
+            text: "burns".to_string(),
+            burn_after_reading: Some(true),
+            ..Default::default()
+        })
+        .await?;
+
+        let entries = db.list().await?;
+        assert_eq!(entries.len(), 2);
+
+        let burning = entries
+            .iter()
+            .filter(|entry| entry.is_burn_after_reading)
+            .count();
+        assert_eq!(burning, 1);
+
+        Ok(())
     }
 
     #[tokio::test]
