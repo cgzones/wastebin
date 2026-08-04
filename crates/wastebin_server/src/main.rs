@@ -134,8 +134,18 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         CSP_STRICT
     };
 
-    let headers: [(HeaderName, HeaderValue); 8] = [
+    let headers: [(HeaderName, HeaderValue); 10] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
+        // Severs `window.opener` and blocks other origins from pulling responses in as no-cors
+        // subresources. Non-browser clients (curl, the API) are unaffected.
+        (
+            HeaderName::from_static("cross-origin-opener-policy"),
+            HeaderValue::from_static("same-origin"),
+        ),
+        (
+            HeaderName::from_static("cross-origin-resource-policy"),
+            HeaderValue::from_static("same-origin"),
+        ),
         (
             HeaderName::from_static("permissions-policy"),
             PERMISSIONS_POLICY,
@@ -431,6 +441,29 @@ mod tests {
         // The copy buttons call `navigator.clipboard.writeText`, whose default allowlist is
         // already `self` — denying it here would break them.
         assert!(!policy.contains("clipboard"), "got: {policy}");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cross_origin_isolation_headers() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in ["/", "/robots.txt"] {
+            let res = client.get(path).send().await?;
+            let headers = res.headers();
+
+            assert_eq!(
+                headers.get("cross-origin-opener-policy").unwrap(),
+                "same-origin",
+                "path {path}"
+            );
+            assert_eq!(
+                headers.get("cross-origin-resource-policy").unwrap(),
+                "same-origin",
+                "path {path}"
+            );
+        }
 
         Ok(())
     }
