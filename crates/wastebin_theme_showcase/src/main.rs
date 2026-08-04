@@ -140,11 +140,15 @@ struct Content {
 fn main() {
     let highlighter = Highlighter::default();
     let content = Content {
-        markdown: markdown::render(SAMPLE, &highlighter).unwrap().into_inner(),
+        markdown: markdown::render(SAMPLE, &highlighter)
+            .unwrap()
+            .into_inner()
+            .to_string(),
         source: highlighter
             .highlight(String::from(SAMPLE_SOURCE), Some(String::from("rs")))
             .unwrap()
-            .into_inner(),
+            .into_inner()
+            .to_string(),
     };
 
     let groups = Theme::ALL

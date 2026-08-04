@@ -52,7 +52,7 @@ pub(crate) struct Paste {
     is_available: bool,
     /// Expiration in case it was set.
     expiration: Option<Expiration>,
-    html: Arc<str>,
+    html: Arc<String>,
     title: Option<String>,
     /// Whether the paste's extension identifies it as Markdown, enabling the rendered-view toggle.
     is_markdown: bool,
@@ -141,11 +141,10 @@ pub async fn get(
             let Data { text, metadata } = data;
             let ext = key.ext.clone();
             let highlighter = highlighter.clone();
-            let html: Arc<str> =
+            let html: Arc<String> =
                 tokio::task::spawn_blocking(move || highlighter.highlight(text, ext))
                     .await??
-                    .into_inner()
-                    .into();
+                    .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");

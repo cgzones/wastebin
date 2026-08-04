@@ -34,7 +34,7 @@ pub(crate) struct Rendered {
     /// Always `true` for this view; needed by the inherited paste template.
     is_markdown: bool,
     expiration: Option<Expiration>,
-    html: Arc<str>,
+    html: Arc<String>,
     title: Option<String>,
 }
 
@@ -104,11 +104,10 @@ pub async fn get(
 
             let Data { text, metadata } = data;
             let highlighter = highlighter.clone();
-            let rendered: Arc<str> =
+            let rendered: Arc<String> =
                 tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
                     .await??
-                    .into_inner()
-                    .into();
+                    .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache rendered markdown");

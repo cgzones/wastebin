@@ -47,7 +47,7 @@ type Slot = (Key, Mode);
 /// whole document.
 #[derive(Clone)]
 pub(crate) struct Cache {
-    inner: Arc<Mutex<LruCache<Slot, Arc<str>>>>,
+    inner: Arc<Mutex<LruCache<Slot, Arc<String>>>>,
 }
 
 impl Cache {
@@ -58,7 +58,7 @@ impl Cache {
         Ok(Self { inner })
     }
 
-    pub fn put(&self, key: &Key, mode: Mode, value: Arc<str>) {
+    pub fn put(&self, key: &Key, mode: Mode, value: Arc<String>) {
         self.inner
             .lock()
             .expect("getting lock")
@@ -66,7 +66,7 @@ impl Cache {
     }
 
     #[must_use]
-    pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<str>> {
+    pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<String>> {
         self.inner
             .lock()
             .expect("getting lock")
