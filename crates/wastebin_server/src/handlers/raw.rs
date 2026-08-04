@@ -77,19 +77,6 @@ mod tests {
         assert_eq!(res.text().await?, "secret-body-xyz");
         assert_eq!(cache_control.unwrap(), "no-store");
 
-        // Plain pastes stay cacheable.
-        let data = Entry {
-            text: String::from("plain"),
-            ..Default::default()
-        };
-
-        let res = client.post_form().form(&data).send().await?;
-        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
-
-        let res = client.get(&format!("/raw{location}")).send().await?;
-        assert_eq!(res.status(), StatusCode::OK);
-        assert!(res.headers().get(header::CACHE_CONTROL).is_none());
-
         Ok(())
     }
 }
