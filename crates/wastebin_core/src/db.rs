@@ -146,11 +146,10 @@ pub enum Open {
 pub mod write {
     use crate::crypto::{Encrypted, Password, Plaintext, Salt};
     use crate::db::Error;
-    use async_compression::tokio::bufread::ZstdEncoder;
     use chacha20poly1305::XNonce;
     use std::io::Cursor;
     use std::num::NonZeroU32;
-    use tokio::io::AsyncReadExt;
+    use tokio::task::spawn_blocking;
 
     /// An uncompressed entry to be inserted into the database.
     #[derive(Default, Debug)]
@@ -191,16 +190,20 @@ pub mod write {
 
     impl Entry {
         /// Compress the entry for insertion.
+        ///
+        /// The data is in memory, so there is nothing to await: compression is pure CPU work and
+        /// runs on a blocking thread rather than stalling an executor thread for the whole body.
         pub async fn compress(self) -> Result<CompressedEntry, Error> {
-            let mut encoder = ZstdEncoder::new(Cursor::new(&self.text));
-            let mut data = Vec::new();
-
-            encoder
-                .read_to_end(&mut data)
-                .await
+            spawn_blocking(move || {
+                let data = zstd::stream::encode_all(
+                    Cursor::new(self.text.as_bytes()),
+                    zstd::DEFAULT_COMPRESSION_LEVEL,
+                )
                 .map_err(|e| Error::Compression(e.to_string()))?;
 
-            Ok(CompressedEntry { entry: self, data })
+                Ok(CompressedEntry { entry: self, data })
+            })
+            .await?
         }
     }
 
@@ -232,10 +235,9 @@ pub mod read {
     use crate::db::Error;
     use crate::expiration::Expiration;
     use crate::id::Id;
-    use async_compression::tokio::bufread::ZstdDecoder;
     use chacha20poly1305::XNonce;
     use std::io::Cursor;
-    use tokio::io::AsyncReadExt;
+    use tokio::task::spawn_blocking;
 
     /// A raw entry as read from the database.
     #[derive(Debug)]
@@ -330,19 +332,21 @@ pub mod read {
     }
 
     impl CompressedReadEntry {
+        /// Decompress on a blocking thread, see [`super::write::Entry::compress`].
         pub async fn decompress(self) -> Result<Data, Error> {
-            let mut decoder = ZstdDecoder::new(Cursor::new(self.data));
-            let mut text = String::new();
+            spawn_blocking(move || {
+                let data = zstd::stream::decode_all(Cursor::new(self.data))
+                    .map_err(|e| Error::Compression(e.to_string()))?;
 
-            decoder
-                .read_to_string(&mut text)
-                .await
-                .map_err(|e| Error::Compression(e.to_string()))?;
+                let text =
+                    String::from_utf8(data).map_err(|e| Error::Compression(e.to_string()))?;
 
-            Ok(Data {
-                text,
-                metadata: self.metadata,
+                Ok(Data {
+                    text,
+                    metadata: self.metadata,
+                })
             })
+            .await?
         }
     }
 }
