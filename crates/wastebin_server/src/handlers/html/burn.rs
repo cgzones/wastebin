@@ -200,6 +200,52 @@ mod tests {
         Ok(())
     }
 
+    /// The confirmation is a form field, and `Form` reads the query string on GET — so a link
+    /// carrying `?confirm_burn=1` skipped the interstitial and destroyed the paste. Anything that
+    /// merely follows a URL (an `<img>`, a prefetch, a link unfurler) could burn it.
+    #[tokio::test]
+    async fn burn_is_not_confirmed_from_the_query_string()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("secret-body-xyz"),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        let location = res
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()?
+            .replace("burn/", "");
+
+        let res = client
+            .get(&location)
+            .query(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await?;
+        assert!(!body.contains("secret-body-xyz"), "content was revealed");
+        assert!(body.contains(">reveal<"), "expected the interstitial");
+
+        // And the paste survived: the interstitial is still there to be confirmed.
+        let res = client
+            .get(&location)
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn burn_confirmation_does_not_delete() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
