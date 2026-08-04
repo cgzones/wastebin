@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- A `WASTEBIN_PASSWORD_SALT` holding non-Unicode data is reported at startup
+  instead of silently falling back to the default salt, which would have made
+  every entry stored under the operator's salt undecryptable.
 - Reject off-origin and scheme-relative `Referer` values when redirecting back
   after a theme change, closing an open-redirect bypass via `//`-prefixed paths.
 - Unlink Unix domain socket after shutdown.
