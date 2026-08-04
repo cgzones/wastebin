@@ -13,6 +13,7 @@ use tabled::{Table, Tabled};
 
 use wastebin_core::db::read::ListEntry;
 use wastebin_core::db::{Database, Open};
+use wastebin_core::env;
 use wastebin_core::env::vars;
 use wastebin_core::id::Id;
 
@@ -185,7 +186,7 @@ async fn main() -> Result<()> {
                 .transpose()
                 .with_context(|| "Invalid identifier")?;
 
-            let (db, db_handler) = Database::new(Open::Path(database))?;
+            let (db, db_handler) = Database::new(Open::Path(database), env::password_hash_salt()?)?;
             tokio::task::spawn(db_handler);
 
             let mut db_items: Vec<_> = db
@@ -248,7 +249,7 @@ async fn main() -> Result<()> {
                 .collect::<Result<Vec<_>, _>>()
                 .with_context(|| "Invalid identifier")?;
 
-            let (db, db_handler) = Database::new(Open::Path(database))?;
+            let (db, db_handler) = Database::new(Open::Path(database), env::password_hash_salt()?)?;
             tokio::task::spawn(db_handler);
 
             let affected = db.delete_many(ids).await?;
@@ -258,7 +259,7 @@ async fn main() -> Result<()> {
             );
         }
         Commands::Purge { database } => {
-            let (db, db_handler) = Database::new(Open::Path(database))?;
+            let (db, db_handler) = Database::new(Open::Path(database), env::password_hash_salt()?)?;
             tokio::task::spawn(db_handler);
 
             let ids = db.purge().await?;
