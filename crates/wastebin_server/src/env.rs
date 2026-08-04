@@ -130,21 +130,12 @@ pub fn max_body_size() -> Result<usize, Error> {
 
 /// Read base URL either from the environment variable or fallback to the hostname.
 pub fn base_url() -> Result<url::Url, Error> {
-    if let Some(base_url) = std::env::var(vars::BASE_URL).map_or_else(
-        |err| {
-            if matches!(err, VarError::NotUnicode(_)) {
-                Err(Error::BaseUrl(format!("{BASE_URL} is not unicode")))
-            } else {
-                Ok(None)
-            }
-        },
-        |var| {
-            Ok(Some(
-                url::Url::parse(&var).map_err(|err| Error::BaseUrl(err.to_string()))?,
-            ))
-        },
-    )? {
-        return Ok(base_url);
+    match std::env::var(vars::BASE_URL) {
+        Ok(var) => return url::Url::parse(&var).map_err(|err| Error::BaseUrl(err.to_string())),
+        Err(VarError::NotUnicode(_)) => {
+            return Err(Error::BaseUrl(format!("{BASE_URL} is not unicode")));
+        }
+        Err(VarError::NotPresent) => {}
     }
 
     let hostname =
@@ -207,27 +198,28 @@ pub(crate) fn validate_expirations(
         let secs = expiration.duration.as_secs();
 
         if secs == 0 || secs > max_secs {
-            return Err(Error::ExpirationExceedsMax(expiration.clone()));
+            return Err(Error::ExpirationExceedsMax(*expiration));
         }
     }
 
     Ok(())
 }
 
-pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
-    std::env::var(vars::RATELIMIT_INSERT)
+/// Parse a per-second rate limit from `var`, mapping parse failures through `err`.
+fn ratelimit(var: &str, err: fn(ParseIntError) -> Error) -> Result<Option<NonZeroU32>, Error> {
+    std::env::var(var)
         .ok()
-        .map(|value| value.parse::<u32>().map_err(Error::RatelimitInsert))
+        .map(|value| value.parse::<u32>().map_err(err))
         .transpose()
         .map(|op| op.and_then(NonZero::new))
 }
 
+pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
+    ratelimit(vars::RATELIMIT_INSERT, Error::RatelimitInsert)
+}
+
 pub fn ratelimit_delete() -> Result<Option<NonZeroU32>, Error> {
-    std::env::var(vars::RATELIMIT_DELETE)
-        .ok()
-        .map(|value| value.parse::<u32>().map_err(Error::RatelimitDelete))
-        .transpose()
-        .map(|op| op.and_then(NonZero::new))
+    ratelimit(vars::RATELIMIT_DELETE, Error::RatelimitDelete)
 }
 
 #[cfg(test)]
