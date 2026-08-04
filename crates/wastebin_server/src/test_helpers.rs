@@ -10,13 +10,15 @@ use tokio::net::TcpListener;
 use crate::cache::Cache;
 use crate::{Ratelimiter, page};
 
-use wastebin_core::db::{self, Database};
+use wastebin_core::db::{self, Database, write};
 use wastebin_core::expiration::ExpirationSet;
+use wastebin_core::id::Id;
 use wastebin_highlight::{Highlighter, Theme};
 
 pub(crate) struct Client {
     client: reqwest::Client,
     addr: SocketAddr,
+    db: Database,
 }
 
 /// Determine if the client should store cookies.
@@ -91,7 +93,7 @@ impl Client {
             None,
         ));
         let state = crate::AppState {
-            db,
+            db: db.clone(),
             cache,
             key,
             page,
@@ -131,12 +133,20 @@ impl Client {
             .build()
             .unwrap();
 
-        Self { client, addr }
+        Self { client, addr, db }
     }
 
     /// The origin this client actually talks to, for `Origin` headers in same-site tests.
     pub(crate) fn origin(&self) -> String {
         format!("http://{}", self.addr)
+    }
+
+    /// Put a paste in place without going through the server.
+    ///
+    /// A test whose subject is the response to a request cannot always arrange its fixture with
+    /// another request — under [`Self::new_timing_out`] the insert would time out too.
+    pub(crate) async fn seed(&self, entry: write::Entry) -> Result<Id, db::Error> {
+        self.db.insert(entry).await.map(|(id, _)| id)
     }
 
     pub(crate) fn get(&self, url: &str) -> RequestBuilder {
