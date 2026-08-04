@@ -96,6 +96,11 @@ impl Client {
         Self { client, addr }
     }
 
+    /// The origin this client actually talks to, for `Origin` headers in same-site tests.
+    pub(crate) fn origin(&self) -> String {
+        format!("http://{}", self.addr)
+    }
+
     pub(crate) fn get(&self, url: &str) -> RequestBuilder {
         self.client.get(format!("http://{}{}", self.addr, url))
     }

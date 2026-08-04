@@ -7,7 +7,7 @@ use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
 use crate::cache::Key;
-use crate::handlers::extract::{Theme, Uids};
+use crate::handlers::extract::{RequestOrigin, Theme, Uids};
 use crate::handlers::html::make_error;
 use crate::handlers::uid_cookie;
 use crate::i18n::Lang;
@@ -60,14 +60,20 @@ impl TryFrom<Entry> for write::Entry {
 }
 
 pub async fn post(
-    State(page): State<Page>,
     State(appstate): State<AppState>,
     jar: SignedCookieJar,
     uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
+    origin: RequestOrigin,
     entry: Result<Form<Entry>, FormRejection>,
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
+    let page: Page = appstate.page.clone();
+
+    if origin.is_cross_site(&page.base_url) {
+        return Err(make_error(crate::Error::CrossSite, page, theme, lang));
+    }
+
     let Ok(Form(entry)) = entry else {
         return Err(make_error(crate::Error::MalformedForm, page, theme, lang));
     };
@@ -119,6 +125,34 @@ mod tests {
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::{StatusCode, header};
     use std::collections::HashMap;
+
+    #[tokio::test]
+    async fn cross_site_insert_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+        let data = Entry {
+            text: String::from("FooBarBaz"),
+            ..Default::default()
+        };
+
+        let res = client
+            .post_form()
+            .header(header::ORIGIN, "https://evil.example.com")
+            .form(&data)
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // The site's own form still works.
+        let res = client
+            .post_form()
+            .header(header::ORIGIN, client.origin())
+            .form(&data)
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn unparsable_expiration_is_rejected() -> Result<(), Box<dyn std::error::Error>> {

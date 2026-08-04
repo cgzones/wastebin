@@ -43,6 +43,17 @@ pub(crate) struct Preference {
 /// Password extractor.
 pub(crate) struct Password(pub crypto::Password);
 
+/// The `Origin` a request declared, together with the `Host` it was addressed to.
+///
+/// Browsers attach `Origin` to form submissions and page script cannot forge it, so a mismatch
+/// identifies a cross-site submission. Requests without one — curl, the JSON API, anything not a
+/// browser — are deliberately left alone: this backs up `SameSite=Strict` on the cookies rather
+/// than replacing it.
+pub(crate) struct RequestOrigin {
+    origin: Option<String>,
+    host: Option<String>,
+}
+
 /// Uid cookie value extractor, extracted from the `uid` cookie.
 ///
 /// The cookie holds a comma-separated list of i64 values: index 0 is the client's
@@ -176,6 +187,67 @@ where
                 .await
                 .ok(),
         )
+    }
+}
+
+/// Strip a trailing `:port` from an authority, leaving an IPv6 literal's brackets intact.
+fn host_of(authority: &str) -> &str {
+    match authority.rfind(']') {
+        Some(end) => &authority[..=end],
+        None => authority.split(':').next().unwrap_or(authority),
+    }
+}
+
+impl RequestOrigin {
+    /// Whether a browser marked this request as coming from another site.
+    ///
+    /// The declared origin is accepted when it names either the host the request was addressed
+    /// to or the configured base URL. Both are needed: a reverse proxy may rewrite `Host` to an
+    /// internal name, while `WASTEBIN_BASE_URL` may be left at its hostname-derived guess. Only
+    /// hosts are compared — a port mismatch is not a cross-site signal worth breaking
+    /// deployments over.
+    pub(crate) fn is_cross_site(&self, base_url: &url::Url) -> bool {
+        let Some(origin) = self.origin.as_deref() else {
+            return false;
+        };
+
+        // A sandboxed or privacy-shielded context sends `null`, which matches nothing.
+        let Some(origin_host) = url::Url::parse(origin)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_owned))
+        else {
+            return true;
+        };
+
+        let addressed = self.host.as_deref().map(host_of);
+        let configured = base_url.host_str();
+
+        addressed != Some(origin_host.as_str()) && configured != Some(origin_host.as_str())
+    }
+}
+
+impl<S> FromRequestParts<S> for RequestOrigin
+where
+    S: Send + Sync,
+{
+    type Rejection = Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> {
+        let header = |name: http::HeaderName| {
+            parts
+                .headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+
+        std::future::ready(Ok(Self {
+            origin: header(http::header::ORIGIN),
+            host: header(http::header::HOST),
+        }))
     }
 }
 
@@ -332,6 +404,63 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn request(origin: Option<&str>, host: Option<&str>) -> RequestOrigin {
+        RequestOrigin {
+            origin: origin.map(str::to_owned),
+            host: host.map(str::to_owned),
+        }
+    }
+
+    fn base_url() -> url::Url {
+        url::Url::parse("https://paste.example.com").unwrap()
+    }
+
+    #[test]
+    fn a_request_without_an_origin_is_allowed() {
+        // curl and the JSON API never send one.
+        assert!(!request(None, Some("paste.example.com")).is_cross_site(&base_url()));
+    }
+
+    #[test]
+    fn the_addressed_host_is_accepted() {
+        // Matches Host but not the configured base URL, as on a LAN deployment.
+        assert!(
+            !request(Some("http://192.168.1.5:8088"), Some("192.168.1.5:8088"))
+                .is_cross_site(&base_url())
+        );
+    }
+
+    #[test]
+    fn the_configured_base_url_is_accepted() {
+        // Matches base_url but not Host, as behind a proxy that rewrites Host.
+        assert!(
+            !request(Some("https://paste.example.com"), Some("127.0.0.1:8088"))
+                .is_cross_site(&base_url())
+        );
+    }
+
+    #[test]
+    fn ipv6_literals_keep_their_brackets() {
+        assert!(!request(Some("http://[::1]:8088"), Some("[::1]:8088")).is_cross_site(&base_url()));
+    }
+
+    #[test]
+    fn another_site_is_rejected() {
+        for origin in [
+            "https://evil.example.com",
+            // A prefix/suffix of the real host must not pass.
+            "https://paste.example.com.evil.test",
+            "https://evilpaste.example.com",
+            // Sandboxed contexts send this; it can never be same-site.
+            "null",
+        ] {
+            assert!(
+                request(Some(origin), Some("paste.example.com")).is_cross_site(&base_url()),
+                "origin {origin} was accepted"
+            );
+        }
+    }
 
     #[test]
     fn picks_highest_q() {

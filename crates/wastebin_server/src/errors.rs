@@ -26,6 +26,8 @@ pub(crate) enum Error {
     UnsupportedMediaType,
     #[error("missing or invalid uid cookie")]
     MissingUid,
+    #[error("cross-site request")]
+    CrossSite,
     #[error("rate-limit hit")]
     RateLimit,
     #[error("expires too far in the future")]
@@ -49,9 +51,9 @@ impl From<Error> for StatusCode {
     fn from(err: Error) -> Self {
         match err {
             Error::Database(db::Error::NotFound) => StatusCode::NOT_FOUND,
-            Error::Database(db::Error::Delete | db::Error::WrongPassword) | Error::MissingUid => {
-                StatusCode::FORBIDDEN
-            }
+            Error::Database(db::Error::Delete | db::Error::WrongPassword)
+            | Error::MissingUid
+            | Error::CrossSite => StatusCode::FORBIDDEN,
             Error::RateLimit => StatusCode::TOO_MANY_REQUESTS,
             Error::Database(db::Error::NoPassword)
             | Error::Id(_)
