@@ -426,8 +426,37 @@ async fn bind_unix_socket(path: &Path) -> std::io::Result<UnixListener> {
     Ok(listener)
 }
 
+/// Report a panic through the subscriber before the default hook takes over.
+///
+/// The release profile aborts on panic, so one anywhere — a handler, a blocking render, the
+/// database thread — ends the process. The default hook only reaches stderr, and `strip = true`
+/// leaves a backtrace as bare addresses, so an operator running under a restart policy would
+/// otherwise see a container that came back and nothing saying why. Chained rather than replaced,
+/// so the usual stderr output survives.
+fn log_panics() {
+    let inherited = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string payload>");
+
+        match info.location() {
+            Some(location) => tracing::error!(%location, "panicked: {payload}"),
+            None => tracing::error!("panicked: {payload}"),
+        }
+
+        inherited(info);
+    }));
+}
+
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+    // After the subscriber: a hook installed earlier would log into nothing.
+    log_panics();
 
     let cache_size = env::cache_size()?;
     let cache_max_bytes = env::cache_max_bytes()?;
