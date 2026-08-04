@@ -21,7 +21,10 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
     let mut builder = Builder::default();
     builder.add_generic_attributes(["class"]);
     builder.add_tags(["input"]);
-    builder.add_tag_attributes("input", ["type", "checked", "disabled"]);
+    builder.add_tag_attributes("input", ["checked", "disabled"]);
+    // `type` is pinned rather than merely allowed: ammonia treats a generic attribute allowance
+    // as permitting every value, which would let a paste render a password field.
+    builder.add_tag_attribute_values("input", "type", ["checkbox"]);
     builder
 });
 
@@ -202,6 +205,21 @@ mod tests {
         let html = render_string("- [x] done\n- [ ] open\n", &Highlighter::default())?;
         assert!(html.contains("type=\"checkbox\""), "got: {html}");
         assert!(html.contains("checked"), "got: {html}");
+        Ok(())
+    }
+
+    #[test]
+    fn input_type_is_restricted_to_checkboxes() -> Result<(), Box<dyn std::error::Error>> {
+        let html = render_string(
+            r#"<input type="password" name="pw"><input type="checkbox" checked>"#,
+            &Highlighter::default(),
+        )?;
+
+        // Task lists are the only reason `input` is allowed at all. A password field in a
+        // rendered paste is a password-manager autofill phishing primitive.
+        assert!(!html.contains("password"), "got: {html}");
+        assert!(html.contains(r#"type="checkbox""#), "got: {html}");
+
         Ok(())
     }
 
