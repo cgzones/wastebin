@@ -131,7 +131,7 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         (CONTENT_SECURITY_POLICY, csp),
         (REFERRER_POLICY, HeaderValue::from_static("same-origin")),
         (X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")),
-        (X_FRAME_OPTIONS, HeaderValue::from_static("SAMEORIGIN")),
+        (X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
         (
             HeaderName::from_static("x-permitted-cross-domain-policies"),
             HeaderValue::from_static("none"),
@@ -368,5 +368,23 @@ fn main() -> ExitCode {
             eprintln!("Error: {err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::test_helpers::{Client, StoreCookies};
+    use http::header::X_FRAME_OPTIONS;
+
+    #[tokio::test]
+    async fn frame_options_matches_csp_frame_ancestors() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let res = client.get("/").send().await?;
+
+        // The CSP says `frame-ancestors 'none'`; the legacy header must not advertise a weaker
+        // policy to consumers that only understand it.
+        assert_eq!(res.headers().get(X_FRAME_OPTIONS).unwrap(), "DENY");
+
+        Ok(())
     }
 }
