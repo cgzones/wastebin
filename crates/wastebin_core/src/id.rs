@@ -10,6 +10,18 @@ const CHAR_TABLE: &[char; 64] = &[
     '5', '6', '7', '8', '9', '-', '+',
 ];
 
+/// Layout of a six-character identifier: total characters, how many of those carry a full six
+/// bits, and the bits the final one carries. `6 * 5 + 2` is exactly the 32 bits of an [`Id::Id32`],
+/// so the final character has room for nothing more — which is what makes a spelling canonical.
+const ID32_CHARS: usize = 6;
+const ID32_LEADING: u32 = 5;
+const ID32_LAST_BITS: u32 = 2;
+
+/// The same for eleven-character identifiers: `6 * 10 + 4` is the 64 bits of an [`Id::Id64`].
+const ID64_CHARS: usize = 11;
+const ID64_LEADING: u32 = 10;
+const ID64_LAST_BITS: u32 = 4;
+
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
     #[error("illegal characters")]
@@ -18,6 +30,54 @@ pub enum Error {
     WrongSize,
     #[error("not a canonical identifier")]
     NotCanonical,
+}
+
+/// Write `n` as `leading` six-bit characters, most significant first, then a final character
+/// holding the remaining `last_bits`.
+fn encode(f: &mut fmt::Formatter<'_>, n: u64, leading: u32, last_bits: u32) -> fmt::Result {
+    use fmt::Write as _;
+
+    for i in (0..leading).rev() {
+        f.write_char(table(n >> (last_bits + 6 * i)))?;
+    }
+
+    f.write_char(table(n & ((1 << last_bits) - 1)))
+}
+
+/// Read back what [`encode`] wrote, rejecting any spelling it would not have produced.
+fn decode(value: &str, leading: u32, last_bits: u32) -> Result<u64, Error> {
+    let leading_chars = usize::try_from(leading).unwrap_or(usize::MAX);
+    let mut n: u64 = 0;
+
+    for (pos, char) in value.chars().enumerate() {
+        let bits = CHAR_TABLE
+            .iter()
+            .position(|c| *c == char)
+            .ok_or(Error::IllegalCharacters)?;
+        let bits = u64::try_from(bits).map_err(|_| Error::IllegalCharacters)?;
+
+        if pos < leading_chars {
+            n = (n << 6) | bits;
+        } else {
+            // The last character carries only the bits `encode` put there. Accepting a wider value
+            // would fold it into bits the previous character already set, giving one identifier
+            // several spellings.
+            if bits >= 1 << last_bits {
+                return Err(Error::NotCanonical);
+            }
+
+            n = (n << last_bits) | bits;
+        }
+    }
+
+    Ok(n)
+}
+
+/// Look up the low six bits of `bits` in [`CHAR_TABLE`]. The mask bounds the index to the table's
+/// 64 entries, so the fallback is unreachable.
+fn table(bits: u64) -> char {
+    let index = usize::try_from(bits & 0x3f).unwrap_or(0);
+    CHAR_TABLE[index]
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -48,24 +108,10 @@ impl Id {
 
 impl fmt::Display for Id {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use fmt::Write as _;
-
-        match self {
-            Self::Id32(n) => {
-                for shift in [26, 20, 14, 8, 2] {
-                    f.write_char(CHAR_TABLE[((n >> shift) & 0x3f) as usize])?;
-                }
-
-                f.write_char(CHAR_TABLE[(n & 0x3) as usize])
-            }
+        match *self {
+            Self::Id32(n) => encode(f, n.into(), ID32_LEADING, ID32_LAST_BITS),
             #[expect(clippy::cast_sign_loss)]
-            Self::Id64(n) => {
-                for shift in [58, 52, 46, 40, 34, 28, 22, 16, 10, 4] {
-                    f.write_char(CHAR_TABLE[((n >> shift) & 0x3f) as usize])?;
-                }
-
-                f.write_char(CHAR_TABLE[(n & 0xf) as usize])
-            }
+            Self::Id64(n) => encode(f, n as u64, ID64_LEADING, ID64_LAST_BITS),
         }
     }
 }
@@ -74,56 +120,18 @@ impl FromStr for Id {
     type Err = Error;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        if value.len() == 6 {
-            let mut n: u32 = 0;
-
-            for (pos, char) in value.chars().enumerate() {
+        match value.len() {
+            ID32_CHARS => {
+                let n = decode(value, ID32_LEADING, ID32_LAST_BITS)?;
                 #[expect(clippy::cast_possible_truncation)]
-                let bits: u32 = CHAR_TABLE
-                    .iter()
-                    .position(|c| *c == char)
-                    .ok_or(Error::IllegalCharacters)? as u32;
-
-                if pos < 5 {
-                    n = (n << 6) | bits;
-                } else {
-                    // The last character only carries the two bits `Display` put there. Accepting
-                    // a wider value would fold it into bits the previous character already set,
-                    // giving one identifier several spellings.
-                    if bits > 0x3 {
-                        return Err(Error::NotCanonical);
-                    }
-
-                    n = (n << 2) | bits;
-                }
+                Ok(Self::Id32(n as u32))
             }
-
-            Ok(Self::Id32(n))
-        } else if value.len() == 11 {
-            let mut n: i64 = 0;
-
-            for (pos, char) in value.chars().enumerate() {
+            ID64_CHARS => {
+                let n = decode(value, ID64_LEADING, ID64_LAST_BITS)?;
                 #[expect(clippy::cast_possible_wrap)]
-                let bits: i64 = CHAR_TABLE
-                    .iter()
-                    .position(|c| *c == char)
-                    .ok_or(Error::IllegalCharacters)? as i64;
-
-                if pos < 10 {
-                    n = (n << 6) | bits;
-                } else {
-                    // Same as above: `Display` only encodes four bits in the last character.
-                    if bits > 0xf {
-                        return Err(Error::NotCanonical);
-                    }
-
-                    n = (n << 4) | bits;
-                }
+                Ok(Self::Id64(n as i64))
             }
-
-            Ok(Self::Id64(n))
-        } else {
-            Err(Error::WrongSize)
+            _ => Err(Error::WrongSize),
         }
     }
 }
