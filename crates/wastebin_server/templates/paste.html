@@ -32,7 +32,7 @@
     <a href="/raw/{{ key }}" class="nav-button" title="{{ lang.t("nav.raw") }}" aria-label="{{ lang.t("nav.raw") }}">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h14a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v4"/><path d="M14 2v6h6"/><path d="m9 18 3-3-3-3"/><path d="m5 12-3 3 3 3"/></svg>
     </a>
-    <button class="nav-button" title="{{ lang.t("nav.copy") }}" aria-label="{{ lang.t("nav.copy") }}" id="copy-button" data-toast-content="{{ lang.t("paste.toast.copied_content") }}" data-toast-url="{{ lang.t("paste.toast.copied_url") }}">
+    <button type="button" class="nav-button" title="{{ lang.t("nav.copy") }}" aria-label="{{ lang.t("nav.copy") }}" id="copy-button" data-toast-content="{{ lang.t("paste.toast.copied_content") }}" data-toast-url="{{ lang.t("paste.toast.copied_url") }}">
       <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M8 4H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h4"/><path d="M16 4h2a2 2 0 0 1 2 2v2"/><path d="M21 14H11"/><path d="m15 10-4 4 4 4"/></svg>
     </button>
     {% block qr_button %}
