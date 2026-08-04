@@ -43,31 +43,23 @@ impl Expiration {
     /// Break the duration into whole `(value, unit)` components, largest unit first.
     #[must_use]
     pub fn components(&self) -> Vec<(u64, Unit)> {
-        /// Computes `dividend` / `divisor` and returns `Some((quotient, remainder))` if quotient > 0.
-        fn div(dividend: u64, divisor: u64) -> Option<(u64, u64)> {
-            let r = dividend / divisor;
-            (r > 0).then_some((r, dividend % divisor))
-        }
+        self.breakdown()
+            .map(|(value, (_, _, unit, ..))| (value, unit))
+            .collect()
+    }
 
+    /// Whole multiples of each [`UNITS`] row the duration breaks into, largest unit first. Rows
+    /// that fit zero times are skipped.
+    fn breakdown(&self) -> impl Iterator<Item = (u64, UnitRow)> {
         let mut secs = self.duration.as_secs();
-        let mut parts = Vec::new();
 
-        for (unit, unit_secs) in [
-            (Unit::Year, YEAR_SECS),
-            (Unit::Month, MONTH_SECS),
-            (Unit::Week, 60 * 60 * 24 * 7),
-            (Unit::Day, 60 * 60 * 24),
-            (Unit::Hour, 60 * 60),
-            (Unit::Minute, 60),
-            (Unit::Second, 1),
-        ] {
-            if let Some((value, rem)) = div(secs, unit_secs) {
-                parts.push((value, unit));
-                secs = rem;
-            }
-        }
-
-        parts
+        UNITS.into_iter().filter_map(move |row| {
+            let value = secs / row.1;
+            (value > 0).then(|| {
+                secs %= row.1;
+                (value, row)
+            })
+        })
     }
 }
 
@@ -78,6 +70,21 @@ pub struct ExpirationSet(Vec<Expiration>);
 const MONTH_SECS: u64 = 30 * 24 * 60 * 60; // 30 days
 /// Rough number of seconds in a year
 const YEAR_SECS: u64 = 365 * 24 * 60 * 60; // 365 days
+
+/// One row of [`UNITS`]: `(magnitude, seconds, unit, singular, plural)`.
+type UnitRow = (&'static str, u64, Unit, &'static str, &'static str);
+
+/// Time units in descending order. Drives parsing of the magnitude suffix, the breakdown into
+/// [`Expiration::components`] and the human-readable formatting.
+const UNITS: [UnitRow; 7] = [
+    ("y", YEAR_SECS, Unit::Year, "year", "years"),
+    ("M", MONTH_SECS, Unit::Month, "month", "months"),
+    ("w", 7 * 24 * 60 * 60, Unit::Week, "week", "weeks"),
+    ("d", 24 * 60 * 60, Unit::Day, "day", "days"),
+    ("h", 60 * 60, Unit::Hour, "hour", "hours"),
+    ("m", 60, Unit::Minute, "min", "mins"),
+    ("s", 1, Unit::Second, "sec", "secs"),
+];
 
 /// A single [`Expiration`] can either be an unsigned number or an unsigned number followed by `=d`
 /// to denote a default expiration.
@@ -96,18 +103,12 @@ impl FromStr for Expiration {
 
             let val = val.parse::<u64>().map_err(Error::ParsingNumber)?;
 
-            let mag = match mag {
-                "s" => 1,
-                "m" => 60,
-                "h" => 60 * 60,
-                "d" => 24 * 60 * 60,
-                "w" => 7 * 24 * 60 * 60,
-                "M" => MONTH_SECS,
-                "y" => YEAR_SECS,
-                _ => Err(Error::IllegalMagnitude)?,
-            };
+            let (_, mag, ..) = UNITS
+                .iter()
+                .find(|(magnitude, ..)| *magnitude == mag)
+                .ok_or(Error::IllegalMagnitude)?;
 
-            val.checked_mul(mag).ok_or(Error::Overflow)?
+            val.checked_mul(*mag).ok_or(Error::Overflow)?
         } else {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
@@ -143,16 +144,7 @@ impl Display for Expiration {
 
         let mut sep = "";
 
-        for (value, unit) in self.components() {
-            let (singular, plural) = match unit {
-                Unit::Year => ("year", "years"),
-                Unit::Month => ("month", "months"),
-                Unit::Week => ("week", "weeks"),
-                Unit::Day => ("day", "days"),
-                Unit::Hour => ("hour", "hours"),
-                Unit::Minute => ("min", "mins"),
-                Unit::Second => ("sec", "secs"),
-            };
+        for (value, (.., singular, plural)) in self.breakdown() {
             let name = if value > 1 { plural } else { singular };
             write!(f, "{sep}{value} {name}")?;
             sep = SEPARATOR;
