@@ -122,9 +122,10 @@ impl From<&Error> for StatusCode {
     fn from(err: &Error) -> Self {
         match err {
             Error::Database(db::Error::NotFound) | Error::RouteNotFound => StatusCode::NOT_FOUND,
-            Error::Database(db::Error::Delete) | Error::MissingUid | Error::CrossSite => {
-                StatusCode::FORBIDDEN
-            }
+            Error::Database(db::Error::Delete)
+            | Error::MissingUid
+            | Error::CrossSite
+            | Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
             // Missing and wrong credentials, not a malformed request and not a permission the
             // caller can never hold: supplying the password is exactly what makes these succeed.
             // `security_headers_layer` gives every 401 the challenge it is required to carry.
@@ -137,12 +138,11 @@ impl From<&Error> for StatusCode {
             | Error::InvalidExtension
             | Error::EmptyPaste
             | Error::TooLongExpires
+            | Error::QrCode(_)
             | Error::SyntaxHighlighting(
                 wastebin_highlight::Error::TooDeeplyNested(_)
                 | wastebin_highlight::Error::TooLarge(_),
             ) => StatusCode::BAD_REQUEST,
-            Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
-            Error::QrCode(_) => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::MalformedRequest => StatusCode::BAD_REQUEST,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
