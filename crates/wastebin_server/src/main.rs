@@ -645,17 +645,23 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new_timing_out(StoreCookies(false)).await;
 
-        // A route whose work goes to a blocking thread, so the request is certain to yield and
-        // the already-elapsed timer is certain to win; a handler that never awaits can outrun it.
+        // A route whose work goes to a blocking thread, so the request is certain to yield; a
+        // handler that never awaits can outrun the timer. The paste view is such a route: it
+        // highlights through `Renderer`. `/burn/` used to be one and is not any more — its QR
+        // encode is too cheap to hand off — so it raced.
+        //
+        // Yielding is not enough on its own, though: a zero timeout is due at once but fires only
+        // on the timer's next millisecond tick, and a paste of a few bytes rendered within that in
+        // a loaded run, answering 200. Many lines keep the render well past the tick.
         // Seeded rather than posted, because an insert through this client would time out too.
         let id = client
             .seed(wastebin_core::db::write::Entry {
-                text: String::from("FooBarBaz"),
+                text: "FooBarBaz\n".repeat(20_000),
                 ..Default::default()
             })
             .await?;
 
-        let res = client.get(&format!("/burn/{id}.txt")).send().await?;
+        let res = client.get(&format!("/{id}.txt")).send().await?;
         assert_eq!(res.status(), http::StatusCode::REQUEST_TIMEOUT);
 
         for header in [

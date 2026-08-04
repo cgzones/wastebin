@@ -7,14 +7,12 @@ use crate::handlers::extract::Theme;
 use crate::handlers::html::qr::{code_for, dark_modules};
 use crate::handlers::html::{Chrome, ErrorResponse};
 use crate::i18n::Lang;
-use crate::render::Renderer;
 use crate::{Database, Page};
 
 /// GET handler for the burn page.
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
-    State(renderer): State<Renderer>,
     chrome: Chrome,
 ) -> Result<Burn, ErrorResponse> {
     async {
@@ -26,7 +24,7 @@ pub async fn get(
         // enough to tell, and reading it never burns anything.
         db.get_metadata(key.id).await?;
 
-        let code = code_for(&renderer, &chrome.page, &key).await?;
+        let code = code_for(&chrome.page.base_url, &key)?;
 
         Ok(Burn {
             page: chrome.page.clone(),
@@ -52,7 +50,7 @@ pub(crate) struct Burn {
 }
 
 impl Burn {
-    fn dark_modules(&self) -> Vec<(i32, i32)> {
+    fn dark_modules(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         dark_modules(&self.code)
     }
 }
