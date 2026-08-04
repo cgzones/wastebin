@@ -21,13 +21,15 @@ use crate::i18n::Lang;
 /// preventing open redirects via external referer values. Falls back to `"/"`.
 pub(crate) struct SafeReferer(pub Redirect);
 
-/// Theme extractor, extracted from the `pref` cookie.
-#[derive(Debug, Deserialize, Clone)]
+/// Theme extractor, extracted from the `pref` cookie. An absent or unparsable cookie yields
+/// [`Theme::System`].
+#[derive(Debug, Deserialize, Clone, Copy, Default)]
 pub(crate) enum Theme {
     #[serde(rename = "dark")]
     Dark,
     #[serde(rename = "light")]
     Light,
+    #[default]
     #[serde(rename = "system")]
     System,
 }
@@ -76,21 +78,19 @@ impl std::str::FromStr for Theme {
     }
 }
 
-impl<S> OptionalFromRequestParts<S> for Theme
+impl<S> FromRequestParts<S> for Theme
 where
     S: Send + Sync,
 {
     type Rejection = Infallible;
 
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &S,
-    ) -> Result<Option<Self>, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         let jar = CookieJar::from_request_parts(parts, state).await;
 
         jar.map(|jar| {
             jar.get("pref")
                 .and_then(|cookie| cookie.value_trimmed().parse::<Theme>().ok())
+                .unwrap_or_default()
         })
     }
 }
@@ -103,6 +103,12 @@ pub(crate) fn parse_uids(value: &str) -> Vec<i64> {
         .split(',')
         .filter_map(|s| s.trim().parse::<i64>().ok())
         .collect()
+}
+
+/// Return `true` if the client's uid list claims ownership of `owner_uid`, i.e. whether this
+/// client is allowed to delete the paste.
+pub(crate) fn can_delete(uids: Option<&Uids>, owner_uid: Option<i64>) -> bool {
+    matches!((uids, owner_uid), (Some(Uids(uids)), Some(owner_uid)) if uids.contains(&owner_uid))
 }
 
 /// Serialize a uid list back into the cookie wire format.

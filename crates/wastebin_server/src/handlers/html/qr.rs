@@ -5,7 +5,7 @@ use qrcodegen::QrCode;
 use url::Url;
 
 use crate::cache::Key;
-use crate::handlers::extract::{Theme, Uids};
+use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::paste::is_markdown_ext;
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
@@ -20,19 +20,12 @@ pub async fn get(
     State(page): State<Page>,
     State(db): State<Database>,
     uids: Option<Uids>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
 ) -> Result<Qr, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
-
-        let code = {
-            let page = page.clone();
-
-            tokio::task::spawn_blocking(move || code_from(&page.base_url, &id))
-                .await
-                .map_err(Error::from)??
-        };
+        let code = code_for(&page, id).await?;
 
         let Metadata {
             uid: owner_uid,
@@ -41,24 +34,17 @@ pub async fn get(
             ..
         } = db.get_metadata(key.id).await?;
 
-        let can_delete = match (uids, owner_uid) {
-            (Some(Uids(uids)), Some(owner_uid)) => uids.contains(&owner_uid),
-            _ => false,
-        };
-
-        let is_markdown = is_markdown_ext(key.ext.as_deref());
-
         Ok(Qr {
             page: page.clone(),
-            theme: theme.clone(),
+            theme,
             lang,
+            can_delete: can_delete(uids.as_ref(), owner_uid),
+            is_markdown: is_markdown_ext(key.ext.as_deref()),
             key,
-            can_delete,
             is_available: true,
             code,
             title,
             expiration,
-            is_markdown,
         })
     }
     .await
@@ -70,7 +56,7 @@ pub async fn get(
 #[template(path = "qr.html", escape = "none")]
 pub(crate) struct Qr {
     page: Page,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     key: Key,
     can_delete: bool,
@@ -92,6 +78,15 @@ pub fn code_from(url: &Url, id: &str) -> Result<QrCode, Error> {
         url.join(id)?.as_str(),
         qrcodegen::QrCodeEcc::High,
     )?)
+}
+
+/// Encode the QR code for `id` off the async runtime.
+pub async fn code_for(page: &Page, id: String) -> Result<QrCode, Error> {
+    let page = page.clone();
+
+    tokio::task::spawn_blocking(move || code_from(&page.base_url, &id))
+        .await
+        .map_err(Error::from)?
 }
 
 /// Return module coordinates that are dark.

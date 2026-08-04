@@ -15,6 +15,7 @@ use axum_extra::extract::cookie::{Cookie, SameSite};
 use ratelimit::Ratelimiter;
 
 use crate::Error;
+use crate::handlers::extract::serialize_uids;
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
@@ -27,6 +28,13 @@ pub(crate) fn cookie(name: &str, value: String) -> Cookie<'static> {
     cookie.set_http_only(true);
     cookie.set_same_site(SameSite::Strict);
     cookie.set_path("/");
+    cookie
+}
+
+/// Build the signed `uid` cookie carrying the client's uid list.
+pub(crate) fn uid_cookie(uids: &[i64]) -> Cookie<'static> {
+    let mut cookie = cookie("uid", serialize_uids(uids));
+    cookie.set_secure(true);
     cookie
 }
 

@@ -1,13 +1,14 @@
 use std::num::NonZeroU32;
 
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
 use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
-use crate::handlers::cookie;
-use crate::handlers::extract::{Theme, Uids, serialize_uids};
+use crate::handlers::extract::{Theme, Uids};
 use crate::handlers::html::make_error;
+use crate::handlers::uid_cookie;
 use crate::i18n::Lang;
 use crate::{AppState, Page};
 use wastebin_core::db::write;
@@ -46,14 +47,14 @@ impl From<Entry> for write::Entry {
     }
 }
 
-pub async fn post<E: std::fmt::Debug>(
+pub async fn post(
     State(page): State<Page>,
     State(appstate): State<AppState>,
     jar: SignedCookieJar,
     uids: Option<Uids>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
-    entry: Result<Form<Entry>, E>,
+    entry: Result<Form<Entry>, FormRejection>,
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
     let Ok(Form(entry)) = entry else {
         return Err(make_error(crate::Error::MalformedForm, page, theme, lang));
@@ -85,10 +86,7 @@ pub async fn post<E: std::fmt::Debug>(
             }
         };
 
-        let mut cookie = cookie("uid", serialize_uids(&uids));
-        cookie.set_secure(true);
-
-        Ok((jar.add(cookie), Redirect::to(&url)))
+        Ok((jar.add(uid_cookie(&uids)), Redirect::to(&url)))
     }
     .await
     .map_err(|err| make_error(err, page, theme, lang))

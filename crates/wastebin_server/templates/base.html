@@ -6,14 +6,11 @@
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{{ page.title }}{% block title_content %}{% endblock %}</title>
     {% match theme %}
-      {% when Some with (Theme::Dark) %}
+      {% when Theme::Dark %}
         <link rel="stylesheet" href="{{ page.assets.css.dark.route() }}">
-      {% when Some with (Theme::Light) %}
+      {% when Theme::Light %}
         <link rel="stylesheet" href="{{ page.assets.css.light.route() }}">
-      {% when Some with (Theme::System) %}
-        <link rel="stylesheet" href="{{ page.assets.css.dark.route() }}" media="(prefers-color-scheme: dark)">
-        <link rel="stylesheet" href="{{ page.assets.css.light.route() }}" media="(prefers-color-scheme: light)">
-      {% when None %}
+      {% when Theme::System %}
         <link rel="stylesheet" href="{{ page.assets.css.dark.route() }}" media="(prefers-color-scheme: dark)">
         <link rel="stylesheet" href="{{ page.assets.css.light.route() }}" media="(prefers-color-scheme: light)">
     {% endmatch %}
@@ -36,7 +33,7 @@
           {% block nav_actions %}{% endblock %}
           <div class="theme-switcher">
             {% match theme %}
-              {% when None %}
+              {% when Theme::System %}
                 <a href="/theme?pref=dark" class="theme-opt" title="{{ lang.t("theme.dark") }}">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                 </a>
@@ -46,17 +43,7 @@
                 <a href="/theme?pref=system" class="theme-opt active" title="{{ lang.t("theme.auto") }}">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
                 </a>
-              {% when Some with (Theme::System) %}
-                <a href="/theme?pref=dark" class="theme-opt" title="{{ lang.t("theme.dark") }}">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
-                </a>
-                <a href="/theme?pref=light" class="theme-opt" title="{{ lang.t("theme.light") }}">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
-                </a>
-                <a href="/theme?pref=system" class="theme-opt active" title="{{ lang.t("theme.auto") }}">
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
-                </a>
-              {% when Some with (Theme::Dark) %}
+              {% when Theme::Dark %}
                 <a href="/theme?pref=dark" class="theme-opt active" title="{{ lang.t("theme.dark") }}">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                 </a>
@@ -66,7 +53,7 @@
                 <a href="/theme?pref=system" class="theme-opt" title="{{ lang.t("theme.auto") }}">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
                 </a>
-              {% when Some with (Theme::Light) %}
+              {% when Theme::Light %}
                 <a href="/theme?pref=dark" class="theme-opt" title="{{ lang.t("theme.dark") }}">
                   <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
                 </a>

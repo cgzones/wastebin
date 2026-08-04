@@ -116,7 +116,7 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
 
 async fn handle_service_errors(
     State(page): State<Page>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     req: Request,
     next: Next,
