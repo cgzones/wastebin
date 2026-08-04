@@ -8,7 +8,6 @@ use crate::cache::Key;
 use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::{Chrome, ErrorResponse};
 use crate::i18n::Lang;
-use crate::render::Renderer;
 use crate::{Error, Highlighter, Page};
 use wastebin_core::db::Database;
 use wastebin_core::expiration::Expiration;
@@ -18,7 +17,6 @@ pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
-    State(renderer): State<Renderer>,
     uids: Option<Uids>,
     chrome: Chrome,
 ) -> Result<Qr, ErrorResponse> {
@@ -29,7 +27,7 @@ pub async fn get(
         // CPU-bound and this route has no rate limiter, so a bogus id would otherwise buy a full
         // one for free.
         let metadata = db.get_metadata(key.id).await?;
-        let code = code_for(&renderer, &chrome.page, &key).await?;
+        let code = code_for(&chrome.page.base_url, &key)?;
 
         // This view never asks for a password, so it may only render the public parts.
         let metadata = metadata.into_public_parts();
@@ -68,7 +66,7 @@ pub(crate) struct Qr {
 }
 
 impl Qr {
-    fn dark_modules(&self) -> Vec<(i32, i32)> {
+    fn dark_modules(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         dark_modules(&self.code)
     }
 }
@@ -89,40 +87,95 @@ fn paste_url(base: &Url, key: &Key) -> Result<Url, Error> {
     Ok(url)
 }
 
-/// Encode the QR code for `key` through the render pool.
+/// Encode the QR code for `key`.
 ///
-/// Encoding is CPU-bound over a caller-supplied extension, so it goes through [`Renderer`] like
-/// highlighting does rather than spawning a blocking task an abandoned request cannot reclaim.
-pub async fn code_for(renderer: &Renderer, page: &Page, key: &Key) -> Result<QrCode, Error> {
-    let page = page.clone();
-    let key = key.clone();
+/// Run inline rather than through [`Renderer`], unlike highlighting. The pool exists so that an
+/// abandoned *expensive* render drops out of the queue instead of occupying a blocking thread, and
+/// it only pays for itself when the work is worth the hand-off. An encode is not: it measures
+/// 69–84 µs for the URLs this builds, which a `spawn_blocking` round trip is a sizeable fraction
+/// of, and taking a permit for it put a QR request behind whatever multi-millisecond highlight
+/// happened to hold one. The input is a paste id and this crate's own base URL, so the cost has no
+/// caller-controlled upper end for the pool to bound in the first place.
+///
+/// Takes the base URL rather than the whole [`Page`], because that is all it reads — which also
+/// lets the pinning test below call it without building one.
+pub fn code_for(base: &Url, key: &Key) -> Result<QrCode, Error> {
+    let url = paste_url(base, key)?;
 
-    renderer
-        .run(move || -> Result<QrCode, Error> {
-            Ok(QrCode::encode_text(
-                paste_url(&page.base_url, &key)?.as_str(),
-                qrcodegen::QrCodeEcc::High,
-            )?)
-        })
-        .await?
+    Ok(QrCode::encode_text(
+        url.as_str(),
+        qrcodegen::QrCodeEcc::High,
+    )?)
 }
 
-/// Return module coordinates that are dark.
-pub fn dark_modules(code: &QrCode) -> Vec<(i32, i32)> {
+/// Yield the module coordinates that are dark.
+///
+/// Borrowed rather than collected: the template walks these once to write the path, and a code of
+/// any size holds thousands of them.
+pub fn dark_modules(code: &QrCode) -> impl Iterator<Item = (i32, i32)> + '_ {
     let size = code.size();
     (0..size)
-        .flat_map(|x| (0..size).map(move |y| (x, y)))
-        .filter(|(x, y)| code.get_module(*x, *y))
-        .collect()
+        .flat_map(move |x| (0..size).map(move |y| (x, y)))
+        .filter(move |(x, y)| code.get_module(*x, *y))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::paste_url;
+    use super::{code_for, paste_url};
     use crate::cache::Key;
     use crate::handlers::insert::api::Entry;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
+    use sha2::{Digest, Sha256};
+
+    /// Hex digest of every module, row by row.
+    fn grid_digest(code: &qrcodegen::QrCode) -> String {
+        let mut hasher = Sha256::new();
+        for y in 0..code.size() {
+            for x in 0..code.size() {
+                hasher.update([u8::from(code.get_module(x, y))]);
+            }
+        }
+        hex::encode(hasher.finalize())
+            .get(0..16)
+            .expect("at least 16 characters")
+            .to_string()
+    }
+
+    /// The exact symbol served for a given paste, pinned.
+    ///
+    /// `qrcodegen` ships no tests of its own — the whole of its repository's test suite is one C
+    /// program, and the Rust port has none — so nothing but this says that upgrading it still
+    /// produces the code this site has been handing out. The version, the mask and every module
+    /// are covered, which between them pin the encoder's three decisions: how much data it packs
+    /// (version), which of the eight patterns it scores best (mask), and what it draws.
+    ///
+    /// A failure here is not necessarily a bug. Mask choice is a quality heuristic, and upstream
+    /// is free to improve it; a changed digest means "look at what the upgrade did and decide",
+    /// not "revert". What it rules out is that happening unnoticed.
+    ///
+    /// The base URL is fixed rather than taken from a running server so the expectation does not
+    /// move with the test harness's port.
+    #[test]
+    fn the_encoded_symbol_is_pinned() {
+        let base = url::Url::parse("https://paste.example.com/").unwrap();
+
+        // id, symbol size, chosen mask, digest of the module grid.
+        for (id, size, mask, digest) in [
+            ("bJZCna", 33, 2, "f8131e519f0e0665"),
+            ("sIiFec.rs", 37, 6, "fc633a7fe8bc6fd9"),
+            ("wxWCRiLU6wc", 37, 6, "afb36e25cda561f4"),
+            ("wxWCRiLU6wc.rs", 37, 4, "51c480d8b499905d"),
+            ("wxWCRiLU6wc.markdown", 41, 6, "c71f46168eac277b"),
+        ] {
+            let key: Key = id.parse().expect("valid key");
+            let code = code_for(&base, &key).expect("encodable");
+
+            assert_eq!(code.size(), size, "{id}: symbol size changed");
+            assert_eq!(code.mask().value(), mask, "{id}: chosen mask changed");
+            assert_eq!(grid_digest(&code), digest, "{id}: module grid changed");
+        }
+    }
 
     /// The QR was built by joining the raw path onto the base URL, and a relative reference whose
     /// first segment holds a colon parses as an absolute URI — `{id}.x://evil.example.com` became
