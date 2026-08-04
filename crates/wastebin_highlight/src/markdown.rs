@@ -120,11 +120,15 @@ fn nesting_depth(html: &str) -> usize {
 /// Markup nested deeper than [`MAX_NESTING_DEPTH`] is rejected instead of sanitized.
 pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
     let text = replace_control_characters(text);
-    let parser = Parser::new_ext(&text, OPTIONS);
-    let events = rewrite_events(parser, highlighter)?;
+    let mut events = Rewrite::new(&text, highlighter);
 
     let mut raw = String::with_capacity(text.len());
-    html::push_html(&mut raw, events.into_iter());
+    html::push_html(&mut raw, &mut events);
+
+    // `push_html` has no way to carry a failure, so the stream ends early and parks it here.
+    if let Some(error) = events.error {
+        return Err(error);
+    }
 
     let depth = nesting_depth(&raw);
     if depth > MAX_NESTING_DEPTH {
@@ -148,46 +152,84 @@ pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
     Ok(Html::new(marked.into_owned()))
 }
 
-fn rewrite_events<'a>(
+/// The parser's events with fenced code blocks replaced by highlighted HTML and GFM alert
+/// blockquotes prefixed by their title.
+///
+/// Yielded lazily rather than collected: an [`Event`] is 80 bytes, so a document of ordinary prose
+/// produced more than ten times its own size in events, held whole for as long as the HTML was
+/// being written and on every render running at once.
+struct Rewrite<'a, 'h> {
     parser: Parser<'a>,
-    highlighter: &Highlighter,
-) -> Result<Vec<Event<'a>>, Error> {
-    let mut out = Vec::new();
-    let mut pending: Option<(String, String)> = None;
-    // Each block bounds itself, but a document is free to hold many of them.
-    let mut highlighted_bytes: usize = 0;
+    highlighter: &'h Highlighter,
+    /// Info string and body of the fenced block currently being collected.
+    pending: Option<(String, String)>,
+    /// Emitted directly after the blockquote start it belongs to.
+    queued: Option<Event<'a>>,
+    /// Each block bounds itself, but a document is free to hold many of them.
+    highlighted_bytes: usize,
+    /// Set when the stream gave up; read by [`render`] once `push_html` returns.
+    error: Option<Error>,
+}
 
-    for event in parser {
-        match event {
-            Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
-                pending = Some((lang.to_string(), String::new()));
-            }
-            Event::Text(text) => match pending.as_mut() {
-                Some((_, buf)) => buf.push_str(&text),
-                None => out.push(Event::Text(text)),
-            },
-            Event::End(TagEnd::CodeBlock) => match pending.take() {
-                Some((lang, code)) => {
-                    let html = highlighter.highlight_code_block(&code, &lang)?;
-
-                    highlighted_bytes = highlighted_bytes.saturating_add(html.len());
-                    if highlighted_bytes > MAX_RENDERED_BYTES {
-                        return Err(Error::TooLarge(MAX_RENDERED_BYTES));
-                    }
-
-                    out.push(Event::Html(CowStr::from(html)));
-                }
-                None => out.push(Event::End(TagEnd::CodeBlock)),
-            },
-            Event::Start(Tag::BlockQuote(Some(kind))) => {
-                out.push(Event::Start(Tag::BlockQuote(Some(kind))));
-                out.push(Event::Html(CowStr::from(alert_title(kind))));
-            }
-            other => out.push(other),
+impl<'a, 'h> Rewrite<'a, 'h> {
+    fn new(text: &'a str, highlighter: &'h Highlighter) -> Self {
+        Self {
+            parser: Parser::new_ext(text, OPTIONS),
+            highlighter,
+            pending: None,
+            queued: None,
+            highlighted_bytes: 0,
+            error: None,
         }
     }
+}
 
-    Ok(out)
+impl<'a> Iterator for Rewrite<'a, '_> {
+    type Item = Event<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(event) = self.queued.take() {
+            return Some(event);
+        }
+
+        loop {
+            // Text inside a fence is collected rather than emitted, so a pass may yield nothing.
+            match self.parser.next()? {
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(lang))) => {
+                    self.pending = Some((lang.to_string(), String::new()));
+                }
+                Event::Text(text) => match self.pending.as_mut() {
+                    Some((_, buf)) => buf.push_str(&text),
+                    None => return Some(Event::Text(text)),
+                },
+                Event::End(TagEnd::CodeBlock) => match self.pending.take() {
+                    Some((lang, code)) => {
+                        let html = match self.highlighter.highlight_code_block(&code, &lang) {
+                            Ok(html) => html,
+                            Err(error) => {
+                                self.error = Some(error);
+                                return None;
+                            }
+                        };
+
+                        self.highlighted_bytes = self.highlighted_bytes.saturating_add(html.len());
+                        if self.highlighted_bytes > MAX_RENDERED_BYTES {
+                            self.error = Some(Error::TooLarge(MAX_RENDERED_BYTES));
+                            return None;
+                        }
+
+                        return Some(Event::Html(CowStr::from(html)));
+                    }
+                    None => return Some(Event::End(TagEnd::CodeBlock)),
+                },
+                Event::Start(Tag::BlockQuote(Some(kind))) => {
+                    self.queued = Some(Event::Html(CowStr::from(alert_title(kind))));
+                    return Some(Event::Start(Tag::BlockQuote(Some(kind))));
+                }
+                other => return Some(other),
+            }
+        }
+    }
 }
 
 /// Return the HTML injected at the top of a GFM alert blockquote.
