@@ -1152,6 +1152,43 @@ mod tests {
         }
     }
 
+    /// The overlay is the only place a visitor learns these bindings exist, and it was maintained
+    /// apart from the script: `r` had been implemented and listed nowhere, while the README named a
+    /// third subset again. Deriving the expectation from `paste.js` is what stops a new binding
+    /// from shipping silently.
+    #[test]
+    fn every_paste_shortcut_is_listed_in_the_help_overlay() {
+        const SCRIPT: &str = include_str!("javascript/paste.js");
+        const OVERLAY: &str = include_str!("../templates/paste.html");
+        const BINDING: &str = "e.key == '";
+
+        let mut found = 0;
+
+        for (offset, _) in SCRIPT.match_indices(BINDING) {
+            let key = SCRIPT[offset + BINDING.len()..]
+                .split('\'')
+                .next()
+                .expect("a closed key literal");
+
+            assert!(
+                OVERLAY.contains(&format!("<kbd>{key}</kbd>")),
+                "paste.js binds `{key}` but the help overlay does not list it"
+            );
+
+            found += 1;
+        }
+
+        // Without this the loop reports success when the script stops spelling bindings this way.
+        assert!(found >= 9, "only matched {found} bindings in paste.js");
+
+        // Escape is spelled by key code rather than by name, so it is matched separately.
+        assert!(SCRIPT.contains("keyCode == 27"), "paste.js dropped Escape");
+        assert!(
+            OVERLAY.contains("<kbd>Esc</kbd>"),
+            "the help overlay does not list Escape"
+        );
+    }
+
     /// Sanitising keeps `class` so highlighted code blocks survive, so a paste may name any of the
     /// site's own chrome classes — and `.toast` is `position: fixed` at `z-index: 1000`, enough to
     /// float a fake "session expired" prompt over the page. The stylesheet is what keeps rendered

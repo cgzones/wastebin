@@ -148,15 +148,17 @@ podman exec -e RUST_LOG=debug -it wastebin /app/wastebin-ctl
 
 When viewing a paste, you can use
 
+* <kbd>n</kbd> to go to the index page,
+* <kbd>p</kbd> to view the formatted paste,
 * <kbd>r</kbd> to view the raw paste,
-* <kbd>n</kbd> to go the index page,
 * <kbd>y</kbd> to copy the current URL to the clipboard,
 * <kbd>c</kbd> to copy the content to the clipboard,
+* <kbd>d</kbd> to download the paste,
 * <kbd>q</kbd> to display the current URL as a QR code,
-* <kbd>p</kbd> to view the formatted paste,
 * <kbd>w</kbd> to toggle line wrapping on and off (off by default),
-* <kbd>m</kbd> to toggle the rendered view on Markdown pastes and
-* <kbd>?</kbd> to view the list of keybindings.
+* <kbd>m</kbd> to toggle the rendered view on Markdown pastes,
+* <kbd>?</kbd> to toggle the list of keybindings and
+* <kbd>Esc</kbd> to close it again.
 
 To paste some text you can also use the <kbd>ctrl</kbd>+<kbd>s</kbd> key
 combination.
