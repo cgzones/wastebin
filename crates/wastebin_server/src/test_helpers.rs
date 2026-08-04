@@ -1,5 +1,5 @@
 use std::net::SocketAddr;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,6 +24,11 @@ pub(crate) struct Client {
 /// Determine if the client should store cookies.
 pub(crate) struct StoreCookies(pub bool);
 
+/// A limiter holding exactly one token, so the second attempt in a test is refused.
+pub(crate) fn one_token_limiter() -> Arc<Ratelimiter> {
+    crate::make_ratelimiter(NonZeroU32::new(1).unwrap())
+}
+
 impl Client {
     pub(crate) async fn new(store_cookies: StoreCookies) -> Self {
         Self::build(store_cookies, None, None, Duration::from_secs(30)).await
@@ -41,7 +46,13 @@ impl Client {
         store_cookies: StoreCookies,
         ratelimit_delete: Option<Arc<Ratelimiter>>,
     ) -> Self {
-        Self::new_with_ratelimits(store_cookies, ratelimit_delete, None).await
+        Self::build(
+            store_cookies,
+            ratelimit_delete,
+            None,
+            Duration::from_secs(30),
+        )
+        .await
     }
 
     /// Like [`Self::new`] but with a configurable password-attempt limiter.
@@ -49,17 +60,9 @@ impl Client {
         store_cookies: StoreCookies,
         ratelimit_password: Option<Arc<Ratelimiter>>,
     ) -> Self {
-        Self::new_with_ratelimits(store_cookies, None, ratelimit_password).await
-    }
-
-    async fn new_with_ratelimits(
-        store_cookies: StoreCookies,
-        ratelimit_delete: Option<Arc<Ratelimiter>>,
-        ratelimit_password: Option<Arc<Ratelimiter>>,
-    ) -> Self {
         Self::build(
             store_cookies,
-            ratelimit_delete,
+            None,
             ratelimit_password,
             Duration::from_secs(30),
         )
@@ -99,13 +102,7 @@ impl Client {
             page,
             highlighter,
             renderer: crate::render::Renderer::with_available_parallelism(),
-            ratelimit_insert: Some(Arc::new(
-                Ratelimiter::builder(60)
-                    .max_tokens(60)
-                    .initial_available(60)
-                    .build()
-                    .unwrap(),
-            )),
+            ratelimit_insert: Some(crate::make_ratelimiter(NonZeroU32::new(60).unwrap())),
             ratelimit_delete,
             ratelimit_password,
         };
