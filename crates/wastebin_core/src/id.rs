@@ -16,6 +16,8 @@ pub enum Error {
     IllegalCharacters,
     #[error("wrong size")]
     WrongSize,
+    #[error("not a canonical identifier")]
+    NotCanonical,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -85,6 +87,13 @@ impl FromStr for Id {
                 if pos < 5 {
                     n = (n << 6) | bits;
                 } else {
+                    // The last character only carries the two bits `Display` put there. Accepting
+                    // a wider value would fold it into bits the previous character already set,
+                    // giving one identifier several spellings.
+                    if bits > 0x3 {
+                        return Err(Error::NotCanonical);
+                    }
+
                     n = (n << 2) | bits;
                 }
             }
@@ -103,6 +112,11 @@ impl FromStr for Id {
                 if pos < 10 {
                     n = (n << 6) | bits;
                 } else {
+                    // Same as above: `Display` only encodes four bits in the last character.
+                    if bits > 0xf {
+                        return Err(Error::NotCanonical);
+                    }
+
                     n = (n << 4) | bits;
                 }
             }
@@ -150,6 +164,42 @@ mod tests {
     }
 
     #[test]
+    fn rejects_non_canonical_spellings() {
+        // Only the first four table entries fit the four bits the last character encodes.
+        for (index, last) in CHAR_TABLE.iter().enumerate() {
+            let id64: String = format!("aaaaaaaaaa{last}");
+            let id32: String = format!("aaaaa{last}");
+
+            assert_eq!(
+                Id::from_str(&id64).is_ok(),
+                index < 16,
+                "11-char id ending in {last} (index {index})"
+            );
+            assert_eq!(
+                Id::from_str(&id32).is_ok(),
+                index < 4,
+                "6-char id ending in {last} (index {index})"
+            );
+        }
+    }
+
+    #[test]
+    fn parsing_round_trips_for_every_accepted_id() {
+        for n in [0i64, 1, 42, -1, i64::MIN, i64::MAX, 0x0fff_ffff_ffff_ffff] {
+            let rendered = Id::from(n).to_string();
+            let parsed = Id::from_str(&rendered).expect("rendered id must parse");
+            assert_eq!(parsed.to_string(), rendered);
+            assert_eq!(parsed.to_i64(), n);
+        }
+
+        for n in [0u32, 1, 42, u32::MAX] {
+            let rendered = Id::from(n).to_string();
+            let parsed = Id::from_str(&rendered).expect("rendered id must parse");
+            assert_eq!(parsed.to_string(), rendered);
+        }
+    }
+
+    #[test]
     fn convert_string_to_id_and_back() {
         let id = Id::from_str("bJZCna").unwrap();
         assert_eq!(id.to_i64(), 104_651_828);
@@ -162,13 +212,20 @@ mod tests {
 
     #[test]
     fn conversion_failures() {
-        assert!(Id::from_str("abDE+-").is_ok());
-        assert!(Id::from_str("abDE+-12345").is_ok());
+        assert!(Id::from_str("abDE+d").is_ok());
+        assert!(Id::from_str("abDE+-1234p").is_ok());
         assert!(matches!(
             Id::from_str("#bDE+-"),
             Err(Error::IllegalCharacters)
         ));
         assert!(matches!(Id::from_str("abDE+-1"), Err(Error::WrongSize)));
         assert!(matches!(Id::from_str("abDE+"), Err(Error::WrongSize)));
+        // The final character carries fewer bits than the alphabet can express, so the wider
+        // spellings that used to alias onto the same id are refused.
+        assert!(matches!(Id::from_str("abDE+-"), Err(Error::NotCanonical)));
+        assert!(matches!(
+            Id::from_str("abDE+-12345"),
+            Err(Error::NotCanonical)
+        ));
     }
 }
