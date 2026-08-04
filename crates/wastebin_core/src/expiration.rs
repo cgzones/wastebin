@@ -18,15 +18,17 @@ pub enum Error {
     DuplicateExpirations,
 }
 
-/// Single expiration value that can be the default in a set of values.
+/// Single expiration value.
 #[derive(Clone, Copy, Debug, Ord, Eq, PartialEq, PartialOrd)]
 pub struct Expiration {
     pub duration: Duration,
-    pub default: bool,
 }
 
-/// Multiple expiration values in ordered fashion.
-pub struct ExpirationSet(Vec<Expiration>);
+/// Multiple expiration values in ordered fashion, one of which may be preselected.
+pub struct ExpirationSet {
+    values: Vec<Expiration>,
+    default: Option<Expiration>,
+}
 
 /// Rough number of seconds in a month
 const MONTH_SECS: u64 = 30 * 24 * 60 * 60; // 30 days
@@ -45,17 +47,11 @@ const UNITS: [(&str, u64, &str, &str); 7] = [
     ("s", 1, "sec", "secs"),
 ];
 
-/// A single [`Expiration`] can either be an unsigned number or an unsigned number followed by `=d`
-/// to denote a default expiration.
+/// A single [`Expiration`] is an unsigned number, optionally followed by a magnitude suffix.
 impl FromStr for Expiration {
     type Err = Error;
 
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (secs, modifier) = match s.split_once('=') {
-            Some((secs, modifier)) => (secs, Some(modifier)),
-            None => (s, None),
-        };
-
+    fn from_str(secs: &str) -> Result<Self, Self::Err> {
         let secs = if let Some(mag_pos) = secs.find(|c: char| !char::is_ascii_digit(&c)) {
             let (val, mag) = secs.split_at(mag_pos);
 
@@ -71,15 +67,8 @@ impl FromStr for Expiration {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
 
-        let default = match modifier {
-            None => false,
-            Some("d") => true,
-            Some(_) => return Err(Error::IllegalModifier),
-        };
-
         Ok(Self {
             duration: Duration::from_secs(secs),
-            default,
         })
     }
 }
@@ -113,17 +102,33 @@ impl Display for Expiration {
     }
 }
 
+/// A set is a comma-separated list of [`Expiration`] values, at most one of which may be followed
+/// by `=d` to preselect it.
 impl FromStr for ExpirationSet {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut values: Vec<Expiration> = s
-            .split(',')
-            .map(FromStr::from_str)
-            .collect::<Result<_, _>>()?;
+        let mut values = Vec::new();
+        let mut default = None;
 
-        if values.iter().filter(|exp| exp.default).count() > 1 {
-            return Err(Error::MultipleDefaults);
+        for part in s.split(',') {
+            let (value, is_default) = match part.split_once('=') {
+                None => (part, false),
+                Some((value, "d")) => (value, true),
+                Some(_) => return Err(Error::IllegalModifier),
+            };
+
+            let expiration = value.parse::<Expiration>()?;
+
+            if is_default {
+                if default.is_some() {
+                    return Err(Error::MultipleDefaults);
+                }
+
+                default = Some(expiration);
+            }
+
+            values.push(expiration);
         }
 
         values.sort();
@@ -132,21 +137,21 @@ impl FromStr for ExpirationSet {
             Err(Error::DuplicateExpirations)?;
         }
 
-        Ok(ExpirationSet(values))
+        Ok(ExpirationSet { values, default })
     }
 }
 
 impl ExpirationSet {
-    /// Retrieve sorted vector of [`Expiration`] values.
+    /// Retrieve the sorted values along with the one preselected by `=d`, if any.
     #[must_use]
-    pub fn into_inner(self) -> Vec<Expiration> {
-        self.0
+    pub fn into_parts(self) -> (Vec<Expiration>, Option<Expiration>) {
+        (self.values, self.default)
     }
 
     /// Borrow the sorted values without consuming the set.
     #[must_use]
     pub fn values(&self) -> &[Expiration] {
-        &self.0
+        &self.values
     }
 }
 
@@ -158,7 +163,6 @@ mod tests {
         fn from_secs(secs: u64) -> Self {
             Self {
                 duration: Duration::from_secs(secs),
-                default: false,
             }
         }
     }
@@ -167,7 +171,6 @@ mod tests {
     fn non_default_expiration() {
         let expiration = "60".parse::<Expiration>().unwrap();
         assert_eq!(expiration.duration, Duration::from_mins(1));
-        assert!(!expiration.default);
     }
 
     #[test]
@@ -239,9 +242,12 @@ mod tests {
 
     #[test]
     fn default_expiration() {
-        let expiration = "60=d".parse::<Expiration>().unwrap();
-        assert_eq!(expiration.duration, Duration::from_mins(1));
-        assert!(expiration.default);
+        let (values, default) = "60=d".parse::<ExpirationSet>().unwrap().into_parts();
+        assert_eq!(values, [Expiration::from_secs(60)]);
+        assert_eq!(default, Some(Expiration::from_secs(60)));
+
+        let (_, default) = "60".parse::<ExpirationSet>().unwrap().into_parts();
+        assert_eq!(default, None);
     }
 
     #[test]
@@ -279,10 +285,10 @@ mod tests {
 
     #[test]
     fn expiration_set() {
-        let expirations = "3600,60=d,48000"
+        let (expirations, default) = "3600,60=d,48000"
             .parse::<ExpirationSet>()
             .unwrap()
-            .into_inner();
+            .into_parts();
 
         assert_eq!(expirations.len(), 3);
 
@@ -290,16 +296,15 @@ mod tests {
         assert_eq!(expirations[1].duration, Duration::from_hours(1));
         assert_eq!(expirations[2].duration, Duration::from_mins(800));
 
-        assert!(expirations[0].default);
-        assert!(!expirations[1].default);
-        assert!(!expirations[2].default);
+        assert_eq!(default, Some(expirations[0]));
 
-        let expirations2 = "1h,1m=d,800m"
+        let (expirations2, default2) = "1h,1m=d,800m"
             .parse::<ExpirationSet>()
             .unwrap()
-            .into_inner();
+            .into_parts();
 
         assert_eq!(expirations, expirations2);
+        assert_eq!(default, default2);
     }
 
     #[test]

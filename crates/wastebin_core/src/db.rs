@@ -80,7 +80,6 @@ fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, boo
         .and_then(|secs| u64::try_from(secs).ok())
         .map(|secs| Expiration {
             duration: Duration::from_secs(secs),
-            default: false,
         });
 
     Ok((

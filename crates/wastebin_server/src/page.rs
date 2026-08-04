@@ -16,12 +16,27 @@ pub(crate) struct Assets {
     pub password_toggle_js: Asset,
 }
 
+/// One selectable expiration in the index form, and whether it is preselected.
+pub(crate) struct ExpirationChoice {
+    pub duration: std::time::Duration,
+    pub default: bool,
+}
+
+impl std::fmt::Display for ExpirationChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Expiration {
+            duration: self.duration,
+        }
+        .fmt(f)
+    }
+}
+
 pub(crate) struct Page {
     pub version: &'static str,
     pub title: String,
     pub assets: Assets,
     pub base_url: Url,
-    pub expirations: Vec<Expiration>,
+    pub expirations: Vec<ExpirationChoice>,
     pub max_body_size: usize,
     pub max_expiration: Option<NonZeroU32>,
 }
@@ -38,7 +53,14 @@ impl Page {
         max_expiration: Option<NonZeroU32>,
     ) -> Self {
         let assets = Assets::new(theme);
-        let expirations = expirations.into_inner();
+        let (values, default) = expirations.into_parts();
+        let expirations = values
+            .into_iter()
+            .map(|expiration| ExpirationChoice {
+                duration: expiration.duration,
+                default: default == Some(expiration),
+            })
+            .collect();
 
         Self {
             version: env!("CARGO_PKG_VERSION"),
@@ -97,5 +119,41 @@ impl Assets {
         ]
         .into_iter()
         .chain(self.css.iter())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn page(expirations: &str) -> Page {
+        Page::new(
+            String::from("test"),
+            Url::parse("https://localhost:8888").unwrap(),
+            Theme::Ayu,
+            expirations.parse::<ExpirationSet>().unwrap(),
+            1024,
+            None,
+        )
+    }
+
+    #[test]
+    fn preselects_the_default_expiration() {
+        let page = page("10m,1h=d,1d");
+
+        let checked = page
+            .expirations
+            .iter()
+            .filter(|choice| choice.default)
+            .collect::<Vec<_>>();
+
+        assert_eq!(checked.len(), 1);
+        assert_eq!(checked[0].duration, std::time::Duration::from_hours(1));
+    }
+
+    #[test]
+    fn preselects_nothing_without_a_default() {
+        let page = page("10m,1h,1d");
+        assert!(page.expirations.iter().all(|choice| !choice.default));
     }
 }
