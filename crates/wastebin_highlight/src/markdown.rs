@@ -5,7 +5,9 @@ use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html,
 };
 
-use crate::highlight::{Error, MAX_RENDERED_BYTES, replace_control_characters};
+use crate::highlight::{
+    Error, MAX_RENDERED_BYTES, mark_deceptive_characters, replace_control_characters,
+};
 use crate::{Highlighter, Html};
 
 const OPTIONS: Options = Options::ENABLE_TABLES
@@ -126,7 +128,21 @@ pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
         return Err(Error::TooDeeplyNested(MAX_NESTING_DEPTH));
     }
 
-    Ok(Html::new(SANITIZER.clean(&raw).to_string()))
+    let cleaned = SANITIZER.clean(&raw).to_string();
+
+    // After the sanitizer, not before: it escapes `<` and `>` inside attribute values, so a tag is
+    // exactly what it looks like and the marker cannot land inside one. Its own markup is this
+    // crate's, and the character it wraps is not markup-significant, so nothing reopens what the
+    // sanitizer just closed.
+    let marked = mark_deceptive_characters(&cleaned);
+
+    // The size check above ran on the unmarked document, and a paste of nothing but zero-width
+    // spaces gains a wrapper on every one of them.
+    if marked.len() > MAX_RENDERED_BYTES {
+        return Err(Error::TooLarge(MAX_RENDERED_BYTES));
+    }
+
+    Ok(Html::new(marked.into_owned()))
 }
 
 fn rewrite_events<'a>(
@@ -384,6 +400,64 @@ mod tests {
             "long line was still highlighted: {}",
             &html[..html.len().min(200)]
         );
+    }
+
+    /// The rendered view is read to judge a paste just as the source view is, so the characters
+    /// that reorder a line have to be visible there too — in prose and inside a fenced block.
+    #[test]
+    fn a_reordering_character_is_marked() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+
+        for md in [
+            "Some \u{202e}reordered prose.\n",
+            "```rs\nlet admin = \u{202e}false;\n```\n",
+            "- a list item with \u{200b}a zero-width space\n",
+        ] {
+            let html = render_string(md, &highlighter)?;
+
+            assert!(html.contains("data-cp=\"U+"), "not marked: {html}");
+        }
+
+        Ok(())
+    }
+
+    /// Marking runs after the sanitizer, so it must not become a way back in: the wrapper is this
+    /// crate's own markup and the character it holds is not markup-significant.
+    #[test]
+    fn marking_does_not_reopen_the_sanitizer() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        let md = "<script>alert(1)</script>\n\n<img src=x onerror=alert(2)> \u{202e}text\n";
+
+        let html = render_string(md, &highlighter)?;
+
+        assert!(!html.contains("<script"), "script survived: {html}");
+        assert!(!html.contains("onerror"), "handler survived: {html}");
+        assert!(html.contains("data-cp=\"U+202E\""), "not marked: {html}");
+
+        Ok(())
+    }
+
+    /// A marker written inside an attribute would break out of it. The sanitizer escapes `>` in
+    /// attribute values before this runs, so a tag is exactly what it looks like.
+    #[test]
+    fn an_attribute_is_never_marked() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        // A URL attribute is percent-encoded by the sanitizer, so the character only survives
+        // verbatim in a plain one like `title` — which is where marking a tag would break out.
+        let md = "<a title=\"x\u{202e}y\" href=\"https://example.com\">z\u{202e}w</a>\n";
+
+        let html = render_string(md, &highlighter)?;
+
+        for (start, _) in html.match_indices('<') {
+            let end = start + html[start..].find('>').unwrap_or(0);
+            let tag = &html[start..=end.max(start)];
+            assert!(
+                !tag.contains("<span class=\"uc\"") || tag.starts_with("<span class=\"uc\""),
+                "marker written into a tag: {tag}"
+            );
+        }
+
+        Ok(())
     }
 
     #[test]

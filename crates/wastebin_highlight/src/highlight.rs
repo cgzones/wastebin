@@ -139,7 +139,7 @@ fn is_deceptive(c: char) -> bool {
 /// character is wrapped rather than replaced: the copy button reads `textContent`, and `/raw`
 /// serves the stored bytes, so neither may see anything but the paste itself. Only text nodes are
 /// touched; a marker written inside an attribute would break out of it.
-fn mark_deceptive_characters(line: &str) -> Cow<'_, str> {
+pub(crate) fn mark_deceptive_characters(line: &str) -> Cow<'_, str> {
     // Every one of these is non-ASCII, and this runs over every row the emitters produce as well
     // as over the whole rendered Markdown document, so let the vectorised scan reject the ordinary
     // line before anything decodes it.

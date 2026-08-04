@@ -236,6 +236,50 @@ mod tests {
         Ok(())
     }
 
+    /// The rendered view is read to judge a paste just as the source view is, so it reveals the
+    /// same characters — and the paste itself stays untouched, so `/raw` still answers with the
+    /// bytes that were stored.
+    #[tokio::test]
+    async fn a_reordering_character_is_shown_but_not_altered()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let text = "Some \u{202e}reordered prose.\n\n```rs\nlet admin = \u{202e}false;\n```\n";
+
+        let res = client
+            .post_form()
+            .form(&Entry {
+                text: text.to_string(),
+                extension: Some(String::from("md")),
+                ..Default::default()
+            })
+            .send()
+            .await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.trim_start_matches('/').trim_end_matches(".md");
+
+        let page = client
+            .get(&format!("/md/{id}"))
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert_eq!(
+            page.matches(r#"data-cp="U+202E""#).count(),
+            2,
+            "prose and code block should both be marked: {page}"
+        );
+
+        let raw = client
+            .get(&format!("/raw/{id}"))
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert_eq!(raw, text, "/raw altered the paste");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn renders_markdown_as_html() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
