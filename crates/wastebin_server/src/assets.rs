@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use axum::body::Bytes;
 use axum::response::{IntoResponse, Response};
 use axum_extra::{TypedHeader, headers};
 use sha2::{Digest, Sha256};
@@ -10,11 +11,11 @@ use wastebin_highlight::Theme;
 #[derive(Clone)]
 pub(crate) struct Asset {
     /// Route that this will be served under.
-    pub route: String,
+    route: String,
     /// MIME type of this asset determined for the `ContentType` response header.
     mime: mime::Mime,
     /// Actual asset content.
-    content: Vec<u8>,
+    content: Bytes,
 }
 
 /// Asset kind.
@@ -26,18 +27,7 @@ pub(crate) enum Kind {
 
 impl IntoResponse for Asset {
     fn into_response(self) -> Response {
-        let content_type_header = headers::ContentType::from(self.mime);
-
-        let headers = (
-            TypedHeader(content_type_header),
-            TypedHeader(
-                headers::CacheControl::new()
-                    .with_max_age(Duration::from_hours(720))
-                    .with_immutable(),
-            ),
-        );
-
-        (headers, self.content).into_response()
+        self.response()
     }
 }
 
@@ -48,7 +38,7 @@ impl Asset {
         Self {
             route: format!("/{name}"),
             mime,
-            content,
+            content: content.into(),
         }
     }
 
@@ -70,13 +60,28 @@ impl Asset {
         Self {
             route,
             mime,
-            content,
+            content: content.into(),
         }
     }
 
     #[must_use]
     pub fn route(&self) -> &str {
         &self.route
+    }
+
+    /// Serve this asset without copying its content.
+    #[must_use]
+    pub fn response(&self) -> Response {
+        let headers = (
+            TypedHeader(headers::ContentType::from(self.mime.clone())),
+            TypedHeader(
+                headers::CacheControl::new()
+                    .with_max_age(Duration::from_hours(720))
+                    .with_immutable(),
+            ),
+        );
+
+        (headers, self.content.clone()).into_response()
     }
 }
 
@@ -108,6 +113,11 @@ impl Css {
             no_js,
         }
     }
+
+    /// Iterate over all CSS assets.
+    pub fn iter(&self) -> impl Iterator<Item = &Asset> {
+        [&self.style, &self.light, &self.dark, &self.no_js].into_iter()
+    }
 }
 
 #[cfg(test)]
@@ -117,10 +127,10 @@ mod tests {
     #[test]
     fn hashed_asset() {
         let asset = Asset::new_hashed("style", Kind::Css, String::from("body {}").into_bytes());
-        assert_eq!(asset.route, "/style.62368a1a29259b30.css");
+        assert_eq!(asset.route(), "/style.62368a1a29259b30.css");
 
         let asset = Asset::new_hashed("main", Kind::Js, String::from("1 + 1").into_bytes());
-        assert_eq!(asset.route, "/main.72fce59447a01f48.js");
+        assert_eq!(asset.route(), "/main.72fce59447a01f48.js");
     }
 
     #[test]

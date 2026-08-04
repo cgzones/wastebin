@@ -148,6 +148,19 @@ async fn handle_service_errors(
     }
 }
 
+/// Build a rate limiter refilling `per_second` tokens every second.
+fn make_ratelimiter(per_second: std::num::NonZeroU32) -> Arc<Ratelimiter> {
+    let value = per_second.get().into();
+
+    Arc::new(
+        Ratelimiter::builder(value)
+            .max_tokens(value)
+            .initial_available(value)
+            .build()
+            .expect("valid rate limiter values"),
+    )
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -175,43 +188,18 @@ async fn shutdown_signal() {
 }
 
 fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router {
-    Router::new()
-        .route(
-            state.page.assets.favicon.route(),
-            get(async |State(page): State<Page>| page.assets.favicon.clone()),
-        )
-        .route(
-            state.page.assets.css.style.route(),
-            get(async |State(page): State<Page>| page.assets.css.style.clone()),
-        )
-        .route(
-            state.page.assets.css.dark.route(),
-            get(async |State(page): State<Page>| page.assets.css.dark.clone()),
-        )
-        .route(
-            state.page.assets.css.light.route(),
-            get(async |State(page): State<Page>| page.assets.css.light.clone()),
-        )
-        .route(
-            state.page.assets.css.no_js.route(),
-            get(async |State(page): State<Page>| page.assets.css.no_js.clone()),
-        )
-        .route(
-            state.page.assets.index_js.route(),
-            get(async |State(page): State<Page>| page.assets.index_js.clone()),
-        )
-        .route(
-            state.page.assets.paste_js.route(),
-            get(async |State(page): State<Page>| page.assets.paste_js.clone()),
-        )
-        .route(
-            state.page.assets.burn_js.route(),
-            get(async |State(page): State<Page>| page.assets.burn_js.clone()),
-        )
-        .route(
-            state.page.assets.password_toggle_js.route(),
-            get(async |State(page): State<Page>| page.assets.password_toggle_js.clone()),
-        )
+    let mut router = Router::new();
+
+    // Register every embedded asset under its content-hashed route, so adding an asset in
+    // `page.rs` cannot silently miss its route here.
+    for asset in state.page.assets.iter() {
+        let route = asset.route().to_owned();
+        let asset = asset.clone();
+
+        router = router.route(&route, get(move || std::future::ready(asset.response())));
+    }
+
+    router
         .route("/", get(html::index::get).post(insert::api::post))
         .route("/robots.txt", get(robots::get))
         .route("/theme", get(theme::get))
@@ -284,26 +272,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         max_expiration,
     ));
     let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
-    let ratelimit_insert = ratelimit_insert.map(|rli| {
-        let value = rli.get().into();
-        Arc::new(
-            Ratelimiter::builder(value)
-                .max_tokens(value)
-                .initial_available(value)
-                .build()
-                .expect("valid rate limiter values"),
-        )
-    });
-    let ratelimit_delete = ratelimit_delete.map(|rld| {
-        let value = rld.get().into();
-        Arc::new(
-            Ratelimiter::builder(value)
-                .max_tokens(value)
-                .initial_available(value)
-                .build()
-                .expect("valid rate limiter values"),
-        )
-    });
+    let ratelimit_insert = ratelimit_insert.map(make_ratelimiter);
+    let ratelimit_delete = ratelimit_delete.map(make_ratelimiter);
     let state = AppState {
         db,
         cache,
