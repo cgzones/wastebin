@@ -2689,7 +2689,6 @@ dependencies = [
  "rusqlite",
  "rusqlite_migration",
  "rust-argon2",
- "serde",
  "thiserror",
  "tokio",
  "tracing",

@@ -85,10 +85,10 @@ pub async fn post(
 
 #[cfg(test)]
 mod tests {
+    use super::Entry;
     use crate::handlers::extract::PASSWORD_HEADER_NAME;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
-    use wastebin_core::db::write::Entry;
 
     #[tokio::test]
     async fn insert() -> Result<(), Box<dyn std::error::Error>> {
