@@ -33,7 +33,7 @@ use tower_http::trace::{MakeSpan, TraceLayer};
 use crate::cache::Cache;
 use crate::errors::Error;
 use crate::handlers::extract::{Accepts, Theme};
-use crate::handlers::{delete, download, html, insert, raw, robots, theme};
+use crate::handlers::{delete, download, health, html, insert, raw, robots, theme};
 use crate::i18n::Lang;
 use crate::render::Renderer;
 use wastebin_core::db::Database;
@@ -328,6 +328,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
     let app = router
         .route("/", get(html::index::get).post(insert::api::post))
         .route("/robots.txt", get(robots::get))
+        .route("/health", get(health::get))
         .route("/theme", post(theme::post))
         .route("/new", post(insert::form::post))
         .route("/qr/{id}", get(html::qr::get))

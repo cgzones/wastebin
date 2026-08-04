@@ -246,6 +246,11 @@ appends the uid to the signed `uid` cookie and redirects to the clean paste URL.
 The form-based UI sets the same cookie in the `Set-Cookie` header of the
 redirect response after creation.
 
+For liveness probes, make a GET request on the `/health` route. It answers
+`200 OK` with an empty body when a query round-trips through the database, and
+`503 Service Unavailable` when it does not. The endpoint needs no
+authentication and is never cached.
+
 
 ### wastebin-ctl command line tool
 
