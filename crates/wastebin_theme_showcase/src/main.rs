@@ -29,23 +29,14 @@ fn main() {
         syntect::html::highlighted_html_for_string(code, &syntax_set, syntax, theme).unwrap()
     };
 
-    let examples = [
-        Theme::Ayu,
-        Theme::Base16Ocean,
-        Theme::Catppuccin,
-        Theme::Coldark,
-        Theme::Gruvbox,
-        Theme::Monokai,
-        Theme::Onehalf,
-        Theme::Solarized,
-    ]
-    .into_iter()
-    .map(|theme| Example {
-        name: theme.name(),
-        light_html: highlight(&theme.light_theme()),
-        dark_html: highlight(&theme.dark_theme()),
-    })
-    .collect();
+    let examples = Theme::ALL
+        .into_iter()
+        .map(|theme| Example {
+            name: theme.name(),
+            light_html: highlight(&theme.light_theme()),
+            dark_html: highlight(&theme.dark_theme()),
+        })
+        .collect();
 
     println!("{}", Page { examples }.render().unwrap());
 }
