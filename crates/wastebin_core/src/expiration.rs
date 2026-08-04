@@ -4,8 +4,6 @@ use std::time::Duration;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
-    #[error("expiration value is empty")]
-    Empty,
     #[error("failed to parse number: {0}")]
     ParsingNumber(std::num::ParseIntError),
     #[error("illegal modifier, only =d allowed")]
@@ -53,10 +51,9 @@ impl FromStr for Expiration {
     type Err = Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut parts = s.split('=');
-
-        let Some(secs) = parts.next() else {
-            return Err(Error::Empty);
+        let (secs, modifier) = match s.split_once('=') {
+            Some((secs, modifier)) => (secs, Some(modifier)),
+            None => (s, None),
         };
 
         let secs = if let Some(mag_pos) = secs.find(|c: char| !char::is_ascii_digit(&c)) {
@@ -74,15 +71,11 @@ impl FromStr for Expiration {
             secs.parse::<u64>().map_err(Error::ParsingNumber)?
         };
 
-        let default = parts.next().map_or(Ok(false), |p| {
-            if parts.next().is_some() {
-                Err(Error::IllegalModifier)
-            } else if p == "d" {
-                Ok(true)
-            } else {
-                Err(Error::IllegalModifier)
-            }
-        })?;
+        let default = match modifier {
+            None => false,
+            Some("d") => true,
+            Some(_) => return Err(Error::IllegalModifier),
+        };
 
         Ok(Self {
             duration: Duration::from_secs(secs),
