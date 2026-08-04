@@ -102,12 +102,19 @@ enum Expired {
     No,
 }
 
+enum BurnAfterReading {
+    Yes,
+    No,
+}
+
 #[derive(Tabled)]
 struct Entry {
     id: Id,
     #[tabled(display("display::option", ""))]
     title: Option<String>,
     encrypted: Encrypted,
+    #[tabled(rename = "burns")]
+    burn_after_reading: BurnAfterReading,
     #[tabled(display("display::option", ""))]
     expiration: Option<String>,
     expired: Expired,
@@ -120,6 +127,12 @@ impl From<bool> for Encrypted {
 }
 
 impl From<bool> for Expired {
+    fn from(value: bool) -> Self {
+        if value { Self::Yes } else { Self::No }
+    }
+}
+
+impl From<bool> for BurnAfterReading {
     fn from(value: bool) -> Self {
         if value { Self::Yes } else { Self::No }
     }
@@ -139,6 +152,15 @@ impl std::fmt::Display for Expired {
         match self {
             Expired::Yes => write!(f, "☑️"),
             Expired::No => Ok(()),
+        }
+    }
+}
+
+impl std::fmt::Display for BurnAfterReading {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BurnAfterReading::Yes => write!(f, "🔥"),
+            BurnAfterReading::No => Ok(()),
         }
     }
 }
@@ -164,6 +186,7 @@ impl From<ListEntry> for Entry {
             id: entry.id,
             title: entry.title.map(sanitize_for_terminal),
             encrypted: entry.is_encrypted.into(),
+            burn_after_reading: entry.is_burn_after_reading.into(),
             expiration: entry.expiration,
             expired: entry.is_expired.into(),
         }
