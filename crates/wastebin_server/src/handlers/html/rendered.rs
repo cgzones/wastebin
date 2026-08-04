@@ -29,7 +29,7 @@ pub(crate) struct Rendered {
     /// Always `true` for this view; needed by the inherited paste template.
     is_markdown: bool,
     expiration: Option<Expiration>,
-    html: Arc<str>,
+    html: Arc<String>,
     title: Option<String>,
 }
 

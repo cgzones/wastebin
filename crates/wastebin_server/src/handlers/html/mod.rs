@@ -137,7 +137,7 @@ pub(crate) struct BurnConfirmation {
 
 /// A paste read for one of the two HTML views, ready to be wrapped in that view's template.
 pub(crate) struct PasteView {
-    pub html: Arc<str>,
+    pub html: Arc<String>,
     pub is_available: bool,
     pub metadata: Metadata,
 }
@@ -246,7 +246,7 @@ impl PasteReader<'_> {
         let Data { text, metadata } = data;
         let ext = key.ext.clone();
         let highlighter = self.highlighter.clone();
-        let html: Arc<str> = self
+        let html: Arc<String> = self
             .renderer
             .run(move || render(text, ext, highlighter))
             .await??

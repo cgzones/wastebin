@@ -33,7 +33,7 @@ pub(crate) enum Mode {
 type Slot = (Id, Option<wastebin_highlight::SyntaxKey>, Mode);
 
 /// The LRU behind [`Cache`], absent when caching is disabled.
-type Store = Option<Arc<Mutex<LruCache<Slot, Arc<str>>>>>;
+type Store = Option<Arc<Mutex<LruCache<Slot, Arc<String>>>>>;
 
 /// Stores rendered HTML, shared so that cache hits are a refcount bump rather than a copy of the
 /// whole document.
@@ -92,7 +92,7 @@ impl Cache {
         (key.id, syntax, mode)
     }
 
-    pub fn put(&self, key: &Key, mode: Mode, value: Arc<str>) {
+    pub fn put(&self, key: &Key, mode: Mode, value: Arc<String>) {
         let Some(inner) = &self.inner else {
             return;
         };
@@ -126,7 +126,7 @@ impl Cache {
     }
 
     #[must_use]
-    pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<str>> {
+    pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<String>> {
         let inner = self.inner.as_ref()?;
 
         // Resolved before the lock, as in `put`: the receiver of `cache_get` — and so `.lock()` —
@@ -145,7 +145,7 @@ impl Cache {
 ///
 /// Entry counts stay small, so summing beats keeping a running total in step with every insert,
 /// eviction and overwrite.
-fn cached_bytes(cache: &LruCache<Slot, Arc<str>>) -> usize {
+fn cached_bytes(cache: &LruCache<Slot, Arc<String>>) -> usize {
     cache.value_order().iter().map(|html| html.len()).sum()
 }
 
@@ -206,18 +206,21 @@ mod tests {
         let key = Key::from_str("bJZCna").unwrap();
 
         let cache = test_cache(NonZeroUsize::new(1), 1024);
-        cache.put(&key, Mode::Source, Arc::from("cached"));
-        assert_eq!(cache.get(&key, Mode::Source).as_deref(), Some("cached"));
+        cache.put(&key, Mode::Source, Arc::new(String::from("cached")));
+        assert_eq!(
+            cache.get(&key, Mode::Source).as_deref().map(String::as_str),
+            Some("cached")
+        );
 
         let cache = test_cache(None, 1024);
-        cache.put(&key, Mode::Source, Arc::from("cached"));
+        cache.put(&key, Mode::Source, Arc::new(String::from("cached")));
         assert!(cache.get(&key, Mode::Source).is_none());
     }
 
     #[test]
     fn total_size_stays_within_the_byte_budget() {
         let cache = test_cache(NonZeroUsize::new(128), 1000);
-        let value: Arc<str> = Arc::from("x".repeat(300).as_str());
+        let value: Arc<String> = Arc::new("x".repeat(300));
 
         // Ten entries of 300 bytes are well within the entry count but far past the budget.
         for n in 0..10u32 {
@@ -256,7 +259,7 @@ mod tests {
     #[test]
     fn eviction_stops_once_the_total_fits() {
         let cache = test_cache(NonZeroUsize::new(128), 1000);
-        let value: Arc<str> = Arc::from("x".repeat(300).as_str());
+        let value: Arc<String> = Arc::new("x".repeat(300));
 
         // Four entries are 1200 bytes against a 1000-byte budget: dropping the oldest leaves 900,
         // and the other three have to survive.
@@ -291,7 +294,7 @@ mod tests {
         let cache = test_cache(NonZeroUsize::new(128), 100);
         let key = Key::from_str("bJZCna").unwrap();
 
-        cache.put(&key, Mode::Source, Arc::from("x".repeat(500).as_str()));
+        cache.put(&key, Mode::Source, Arc::new("x".repeat(500)));
         assert!(cache.get(&key, Mode::Source).is_none());
     }
 
@@ -304,13 +307,19 @@ mod tests {
             id,
             ext: Some("zzz-not-a-syntax".to_string()),
         };
-        cache.put(&stored, Mode::Source, Arc::from("plain"));
+        cache.put(&stored, Mode::Source, Arc::new(String::from("plain")));
 
         // A different unknown extension, and no extension at all, render identically and so must
         // hit the same entry rather than each taking a slot of their own.
         for ext in [None, Some("also-not-a-syntax".to_string())] {
             let probe = Key { id, ext };
-            assert_eq!(cache.get(&probe, Mode::Source).as_deref(), Some("plain"));
+            assert_eq!(
+                cache
+                    .get(&probe, Mode::Source)
+                    .as_deref()
+                    .map(String::as_str),
+                Some("plain")
+            );
         }
 
         // A real syntax is a different render and keeps its own slot.
@@ -334,7 +343,11 @@ mod tests {
             id,
             ext: Some("md".to_string()),
         };
-        cache.put(&stored, Mode::Source, Arc::from("rendered as markdown"));
+        cache.put(
+            &stored,
+            Mode::Source,
+            Arc::new(String::from("rendered as markdown")),
+        );
 
         for ext in ["markdown", "mdown"] {
             let probe = Key {
@@ -342,7 +355,10 @@ mod tests {
                 ext: Some(ext.to_string()),
             };
             assert_eq!(
-                cache.get(&probe, Mode::Source).as_deref(),
+                cache
+                    .get(&probe, Mode::Source)
+                    .as_deref()
+                    .map(String::as_str),
                 Some("rendered as markdown"),
                 "{ext} did not share markdown's slot",
             );
@@ -369,12 +385,19 @@ mod tests {
             id,
             ext: Some("md".to_string()),
         };
-        cache.put(&stored, Mode::Rendered, Arc::from("<h1>x</h1>"));
+        cache.put(
+            &stored,
+            Mode::Rendered,
+            Arc::new(String::from("<h1>x</h1>")),
+        );
 
         for ext in [None, Some("rs".to_string()), Some("py".to_string())] {
             let probe = Key { id, ext };
             assert_eq!(
-                cache.get(&probe, Mode::Rendered).as_deref(),
+                cache
+                    .get(&probe, Mode::Rendered)
+                    .as_deref()
+                    .map(String::as_str),
                 Some("<h1>x</h1>"),
             );
         }

@@ -53,7 +53,7 @@ pub(crate) struct Paste {
     is_available: bool,
     /// Expiration in case it was set.
     expiration: Option<Expiration>,
-    html: Arc<str>,
+    html: Arc<String>,
     title: Option<String>,
     /// Whether the paste's extension identifies it as Markdown, enabling the rendered-view toggle.
     is_markdown: bool,

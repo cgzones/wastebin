@@ -88,10 +88,13 @@ impl Budget {
     }
 }
 
-/// Rendered HTML, shared so that cloning is a refcount bump rather than a copy of the whole
-/// document.
-#[derive(Clone)]
-pub struct Html(Arc<str>);
+/// Rendered HTML. Held as an [`Arc<String>`] so that [`Html::into_inner`] hands the document to
+/// the cache and the response without copying it.
+///
+/// `Arc<str>` cannot: its refcount header sits inline with the bytes, so building one from a
+/// `String` always copies the whole document — nearly a millisecond for a 16 MB render, on every
+/// miss. `Arc<String>` adopts the buffer the emitter already filled and costs one pointer hop.
+pub struct Html(Arc<String>);
 
 pub struct Highlighter {
     syntax_set: SyntaxSet,
@@ -634,11 +637,11 @@ impl Html {
     /// Wrap an already-HTML string. Callers are responsible for ensuring the content is safe to
     /// insert into a page (i.e. produced by a trusted renderer).
     pub(crate) fn new(html: String) -> Self {
-        Self(Arc::from(html))
+        Self(Arc::new(html))
     }
 
     #[must_use]
-    pub fn into_inner(self) -> Arc<str> {
+    pub fn into_inner(self) -> Arc<String> {
         self.0
     }
 }
@@ -654,7 +657,7 @@ mod tests {
     static HIGHLIGHTER: LazyLock<Highlighter> = LazyLock::new(Highlighter::default);
 
     /// Render `text` as `ext` and hand back the markup.
-    fn highlight_string(text: &str, ext: &str) -> Result<Arc<str>, Error> {
+    fn highlight_string(text: &str, ext: &str) -> Result<Arc<String>, Error> {
         HIGHLIGHTER
             .highlight(text.to_string(), Some(ext.to_string()))
             .map(Html::into_inner)

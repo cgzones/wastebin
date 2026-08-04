@@ -258,7 +258,7 @@ mod tests {
     /// immutable, so the tests share a single instance rather than paying that per test.
     static HIGHLIGHTER: LazyLock<Highlighter> = LazyLock::new(Highlighter::default);
 
-    fn render_string(text: &str) -> Result<std::sync::Arc<str>, Error> {
+    fn render_string(text: &str) -> Result<std::sync::Arc<String>, Error> {
         render(text, &HIGHLIGHTER).map(Html::into_inner)
     }
 
