@@ -1,84 +1,31 @@
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
-use crate::cache::Key;
-use crate::handlers::NoStore;
-use crate::handlers::PasswordRatelimit;
-use crate::handlers::extract::{Accepts, Password, Theme};
-use crate::handlers::html::{ErrorResponse, FormAction, make_error, password_input};
-use crate::i18n::Lang;
-use crate::{Database, Page};
-use wastebin_core::db;
-use wastebin_core::db::read::Entry;
+use crate::Database;
+use crate::handlers::extract::Password;
+use crate::handlers::html::{Chrome, ErrorResponse};
+use crate::handlers::{PasswordRatelimit, serve_bytes};
 
 /// GET handler for raw content of a paste.
-#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
-    State(page): State<Page>,
     State(ratelimit): State<PasswordRatelimit>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
-    async {
-        let password = password.map(|Password(password)| password);
-        let key: Key = id.parse()?;
-
-        let metadata = db.get_metadata(key.id).await?;
-
-        // This route is a GET that returns bytes, so there is nowhere to confirm the destruction
-        // and nothing stopping anything that merely follows a URL from triggering it. The content
-        // stays reachable through the paste page, which does ask first.
-        if metadata.must_be_deleted {
-            return Err(crate::Error::BurnNotConfirmed);
-        }
-
-        // Only an attempt that reaches argon2 is worth a token. The bucket is a single
-        // process-wide one with no refund, so letting a password for a missing or unencrypted
-        // paste spend one let anyone lock every user out of every encrypted paste for free.
-        if password.is_some() && metadata.is_encrypted {
-            ratelimit.check()?;
-        }
-
-        let Entry {
-            data,
-            encrypted,
-            burn,
-        } = match db.get(key.id, password).await {
-            Ok(entry) => entry,
-            // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on
-            // an HTML form and would only see a 200 where it expected the paste.
-            Err(db::Error::NoPassword) if accepts == Accepts::Html => {
-                return Ok(password_input(&page, theme, lang, FormAction::source(&key)));
-            }
-            Err(err) => return Err(err.into()),
-        };
-
-        // Unreachable behind the refusal above, but whatever serves the content is what burns
-        // it: relaxing that check must not turn these routes into a way past the single read.
-        if let Some(burn) = burn {
-            db.burn(burn).await?;
-        }
-
-        let response = data.text.into_response();
-        Ok(if encrypted {
-            response.no_store()
-        } else {
-            response
-        })
-    }
+    serve_bytes(&db, &ratelimit, &chrome, id, password, |_, data| {
+        data.text.into_response()
+    })
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::handlers::extract::PASSWORD_HEADER_NAME;
     use crate::handlers::insert::form::Entry;
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, StoreCookies, one_token_limiter};
     use reqwest::{StatusCode, header};
 
     /// Every password attempt runs a full argon2 derivation before the ciphertext is looked at, so
@@ -86,16 +33,7 @@ mod tests {
     /// an anonymous caller could ask for.
     #[tokio::test]
     async fn password_attempts_are_rate_limited() -> Result<(), Box<dyn std::error::Error>> {
-        // The token comes back once an hour rather than once a second: an argon2 attempt in a
-        // loaded parallel run can take longer than a second, and a token refilled meanwhile let
-        // through the attempt the test expects to be refused.
-        let limiter = std::sync::Arc::new(
-            ratelimit::Ratelimiter::builder(1)
-                .period(std::time::Duration::from_secs(3600))
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
 
         let paste = client
@@ -140,13 +78,7 @@ mod tests {
     #[tokio::test]
     async fn a_password_for_no_derivation_keeps_its_token() -> Result<(), Box<dyn std::error::Error>>
     {
-        let limiter = std::sync::Arc::new(
-            ratelimit::Ratelimiter::builder(1)
-                .period(std::time::Duration::from_secs(3600))
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
 
         let secret = client

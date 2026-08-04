@@ -25,8 +25,19 @@ pub(crate) struct Client {
 pub(crate) struct StoreCookies(pub bool);
 
 /// A limiter holding exactly one token, so the second attempt in a test is refused.
+///
+/// The token comes back once an hour rather than once a second: an argon2 attempt in a loaded
+/// parallel run can take longer than a second, and a token refilled meanwhile let through the
+/// attempt the test expects to be refused.
 pub(crate) fn one_token_limiter() -> Arc<Ratelimiter> {
-    crate::make_ratelimiter(NonZeroU32::new(1).unwrap())
+    Arc::new(
+        Ratelimiter::builder(1)
+            .period(Duration::from_secs(3600))
+            .max_tokens(1)
+            .initial_available(1)
+            .build()
+            .expect("valid rate limiter values"),
+    )
 }
 
 impl Client {
