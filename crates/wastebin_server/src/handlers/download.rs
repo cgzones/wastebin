@@ -59,7 +59,7 @@ fn make_content_disposition(filename: &str) -> HeaderValue {
 fn get_download(key: &Key, data: Data) -> impl IntoResponse {
     let filename = data.metadata.title.unwrap_or_else(|| key.to_string());
 
-    let content_type = "text; charset=utf-8";
+    let content_type = "text/plain; charset=utf-8";
     let content_disposition = make_content_disposition(&filename);
 
     (
