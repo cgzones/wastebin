@@ -337,6 +337,39 @@ pub mod read {
         pub is_encrypted: bool,
     }
 
+    /// What a view may render from a paste's metadata before any password is supplied.
+    ///
+    /// The title is present only when the paste is not encrypted. Only the content is encrypted —
+    /// `title` is a plain column — so a view that renders metadata ahead of the password would
+    /// otherwise hand anyone holding the id the one thing the password was assumed to cover.
+    /// Having the filtered form be its own type is what makes that structural: there is no way to
+    /// build a `PublicMetadata` still carrying a title that must not be shown.
+    #[derive(Debug)]
+    pub struct PublicMetadata {
+        /// User identifier that inserted the entry.
+        pub uid: Option<i64>,
+        /// Title, if this paste has one and it may be shown.
+        pub title: Option<String>,
+        /// Entry expiration datetime.
+        pub expiration: Option<Expiration>,
+    }
+
+    impl Metadata {
+        /// Split into the parts a view may render before a password is supplied.
+        ///
+        /// Consumes the metadata rather than copying out of it: the title goes straight to a
+        /// template that owns its own, and what is left behind cannot be a value still holding the
+        /// title of an encrypted paste.
+        #[must_use]
+        pub fn into_public_parts(self) -> PublicMetadata {
+            PublicMetadata {
+                uid: self.uid,
+                title: (!self.is_encrypted).then_some(self.title).flatten(),
+                expiration: self.expiration,
+            }
+        }
+    }
+
     /// Potentially deleted or non-existent expired entry.
     #[derive(Debug)]
     pub enum Entry {
