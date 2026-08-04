@@ -43,7 +43,9 @@ impl From<Entry> for write::Entry {
             expires: entry.expires,
             burn_after_reading: entry.burn_after_reading,
             uid: None,
-            password: entry.password,
+            // An empty password would encrypt the paste with a key derived from nothing, and the
+            // password prompt rejects empty input, so the paste could never be opened again.
+            password: entry.password.filter(|password| !password.is_empty()),
             title: entry.title,
         }
     }
@@ -104,6 +106,29 @@ mod tests {
 
         let payload = res.json::<super::RedirectResponse>().await?;
 
+        let res = client.get(&format!("/raw{}", payload.path)).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().await?, "FooBarBaz");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn insert_with_empty_password_is_not_encrypted() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            password: Some(String::new()),
+            ..Default::default()
+        };
+
+        let res = client.post_json().json(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let payload = res.json::<super::RedirectResponse>().await?;
+
+        // No password was really set, so the paste must be readable without one.
         let res = client.get(&format!("/raw{}", payload.path)).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
         assert_eq!(res.text().await?, "FooBarBaz");
