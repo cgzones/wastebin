@@ -544,7 +544,7 @@ impl Handler {
         Ok(affected)
     }
 
-    fn delete_for(&mut self, id: Id, uids: &[i64]) -> Result<(), Error> {
+    fn delete_for(&self, id: Id, uids: &[i64]) -> Result<(), Error> {
         if uids.is_empty() {
             return Err(Error::Delete);
         }
@@ -552,11 +552,8 @@ impl Handler {
         let placeholders = vec!["?"; uids.len()].join(",");
         let delete_sql = format!("DELETE FROM entries WHERE id=? AND uid IN ({placeholders})");
 
-        let mut params = Vec::with_capacity(uids.len() + 1);
-        params.push(id.to_i64());
-        params.extend_from_slice(uids);
-
-        let affected = self.conn.execute(&delete_sql, params_from_iter(&params))?;
+        let params = std::iter::once(id.to_i64()).chain(uids.iter().copied());
+        let affected = self.conn.execute(&delete_sql, params_from_iter(params))?;
 
         if affected == 0 {
             return Err(Error::Delete);
