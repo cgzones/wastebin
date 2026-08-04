@@ -135,6 +135,11 @@ pub async fn get(
         // saying so, since there the caller did mean to address one.
         let key: Key = id.parse().map_err(|_| crate::Error::RouteNotFound)?;
 
+        // Once for the whole request: the cache slot, the render and the Markdown toggle below all
+        // want the same answer, and working it out walks the entire syntax set each time.
+        let syntax = highlighter.resolve(key.ext.as_deref());
+        let is_markdown = syntax.is_markdown();
+
         let ratelimit = PasswordRatelimit::from_ref(&appstate);
         PasteReader {
             db,
@@ -143,13 +148,13 @@ pub async fn get(
             ratelimit: &ratelimit,
             chrome: &chrome,
             highlighter,
-            mode: Mode::Source,
+            mode: Mode::Source(syntax.key()),
         }
         .read(
             &key,
             form,
             FormAction::source(&key),
-            |text, ext, highlighter| highlighter.highlight(text, ext),
+            move |text, highlighter| highlighter.highlight_resolved(text, syntax),
             |PasteView {
                  html,
                  is_available,
@@ -166,7 +171,7 @@ pub async fn get(
                 let paste = Paste {
                     page: chrome.page.clone(),
                     can_delete: can_delete(uids.as_ref(), owner_uid),
-                    is_markdown: highlighter.is_markdown(key.ext.as_deref()),
+                    is_markdown,
                     key: key.clone(),
                     theme: chrome.theme,
                     lang: chrome.lang,

@@ -222,11 +222,7 @@ impl PasteReader<'_> {
         key: &Key,
         form: Option<PasteForm>,
         action: FormAction,
-        render: impl FnOnce(
-            String,
-            Option<String>,
-            Highlighter,
-        ) -> Result<Html, wastebin_highlight::Error>
+        render: impl FnOnce(String, Highlighter) -> Result<Html, wastebin_highlight::Error>
         + Send
         + 'static,
         page: impl FnOnce(PasteView) -> Response,
@@ -291,13 +287,8 @@ impl PasteReader<'_> {
         };
         let is_available = burn.is_none();
 
-        let ext = key.ext.clone();
         let highlighter = self.highlighter.clone();
-        let html: Arc<String> = match self
-            .renderer
-            .run(move || render(text, ext, highlighter))
-            .await?
-        {
+        let html: Arc<String> = match self.renderer.run(move || render(text, highlighter)).await? {
             Ok(html) => html.into_inner(),
             // The general message sends the reader to `/raw` and the download, which refuse a
             // paste that burns.

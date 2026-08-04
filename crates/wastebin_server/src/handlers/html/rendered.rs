@@ -74,7 +74,7 @@ pub async fn get(
             &key,
             form,
             FormAction::rendered(&key),
-            |text, _, highlighter| markdown::render(&text, &highlighter),
+            |text, highlighter| markdown::render(&text, &highlighter),
             |PasteView {
                  html,
                  is_available,
@@ -190,6 +190,53 @@ mod tests {
 
         let res = client.get(&format!("/md/{id}")).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    /// Markdown nested past the parser's limit fails to render on every attempt, and the reveal
+    /// burnt the paste before rendering it: the one read went to an error page and the paste was
+    /// gone. The source view can still show it, so the failed attempt has to leave it there.
+    #[tokio::test]
+    async fn a_failed_render_leaves_a_burn_paste_for_another_view()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: "<div>".repeat(300),
+            extension: Some(String::from("md")),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        for attempt in 0..2 {
+            let res = client
+                .post(&format!("/md/{id}"))
+                .form(&[("confirm_burn", "1")])
+                .header(header::ACCEPT, "text/html")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "attempt {attempt}");
+        }
+
+        let res = client
+            .post(&format!("/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.text().await?.contains("confirm_burn"), "not revealed");
+
+        let res = client
+            .post(&format!("/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "revealed twice");
 
         Ok(())
     }
@@ -375,53 +422,6 @@ mod tests {
             .send()
             .await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
-
-        Ok(())
-    }
-
-    /// Markdown nested past the parser's limit fails to render on every attempt, and the reveal
-    /// burnt the paste before rendering it: the one read went to an error page and the paste was
-    /// gone. The source view can still show it, so the failed attempt has to leave it there.
-    #[tokio::test]
-    async fn a_failed_render_leaves_a_burn_paste_for_another_view()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let client = Client::new(StoreCookies(false)).await;
-        let data = Entry {
-            text: "<div>".repeat(300),
-            extension: Some(String::from("md")),
-            burn_after_reading: Some(String::from("on")),
-            ..Default::default()
-        };
-
-        let res = client.post_form().form(&data).send().await?;
-        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
-        let id = location.replace("/burn/", "");
-
-        for attempt in 0..2 {
-            let res = client
-                .post(&format!("/md/{id}"))
-                .form(&[("confirm_burn", "1")])
-                .header(header::ACCEPT, "text/html")
-                .send()
-                .await?;
-            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "attempt {attempt}");
-        }
-
-        let res = client
-            .post(&format!("/{id}"))
-            .form(&[("confirm_burn", "1")])
-            .header(header::ACCEPT, "text/html")
-            .send()
-            .await?;
-        assert_eq!(res.status(), StatusCode::OK);
-        assert!(!res.text().await?.contains("confirm_burn"), "not revealed");
-
-        let res = client
-            .post(&format!("/{id}"))
-            .form(&[("confirm_burn", "1")])
-            .send()
-            .await?;
-        assert_eq!(res.status(), StatusCode::NOT_FOUND, "revealed twice");
 
         Ok(())
     }
