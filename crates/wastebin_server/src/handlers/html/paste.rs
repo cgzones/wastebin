@@ -234,6 +234,45 @@ mod tests {
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
 
+    /// A burn paste whose page exceeds the render bound fails the same way on every attempt, and
+    /// the reveal burnt it before rendering — so the raw view the message sends the reader to
+    /// had nothing left to serve.
+    #[tokio::test]
+    async fn a_burn_paste_too_large_to_display_survives_the_attempt()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        // Every line costs its gutter and row markup, so this renders far past the bound.
+        let text = format!("x{}", "\n".repeat(230_000));
+        let data = Entry {
+            text: text.clone(),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        for attempt in 0..2 {
+            let res = client
+                .post(&format!("/{id}"))
+                .form(&[("confirm_burn", "1")])
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "attempt {attempt}");
+        }
+
+        // The raw view serves it, as the message says, and that read burns it.
+        let res = client.get(&format!("/raw/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().await?, text);
+
+        let res = client.get(&format!("/raw/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
     /// This route doubles as the catch-all for single-segment paths, so `/about` used to answer
     /// "that is not a valid paste identifier" — describing a paste the visitor never asked for.
     #[tokio::test]
