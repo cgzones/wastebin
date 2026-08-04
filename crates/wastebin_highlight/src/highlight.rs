@@ -99,10 +99,6 @@ fn is_markdown_link(scope: Scope) -> bool {
 
 /// Number of unmatched `</span>` closes encountered before the running balance recovers.
 fn open_span_prefix(formatted: &str) -> usize {
-    if !formatted.contains("<span") && !formatted.contains("</span>") {
-        return 0;
-    }
-
     formatted
         .split('<')
         .skip(1)
@@ -115,9 +111,9 @@ fn open_span_prefix(formatted: &str) -> usize {
             Some(*balance)
         })
         .min()
-        .map_or(0, std::ops::Neg::neg)
-        .try_into()
         .unwrap_or(0)
+        .min(0)
+        .unsigned_abs()
 }
 
 /// Modified version of [`syntect::html::line_tokens_to_classed_spans`] that outputs HTML anchors
@@ -233,22 +229,12 @@ impl Highlighter {
             // the line's HTML self-contained — using only `delta` would let `</span>` precede
             // its match within the line, producing misnested output.
             let prepend = open_span_prefix(&formatted);
-            code.push_str(&"<span>".repeat(prepend));
-
-            code.reserve(formatted.len());
-
-            for segment in formatted.split('\n') {
-                code.push_str(segment);
-            }
-
-            let extra_close =
-                isize::try_from(prepend).expect("prepend count fits into isize") + delta;
-
-            if extra_close > 0 {
-                code.push_str(
-                    &"</span>".repeat(extra_close.try_into().expect("isize fits into usize")),
-                );
-            }
+            code.extend(std::iter::repeat_n("<span>", prepend));
+            code.extend(formatted.split('\n'));
+            code.extend(std::iter::repeat_n(
+                "</span>",
+                prepend.saturating_add_signed(delta),
+            ));
 
             code.push_str("</div>");
         }
