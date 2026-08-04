@@ -24,6 +24,8 @@ pub(crate) enum Error {
     PayloadTooLarge,
     #[error("unsupported media type")]
     UnsupportedMediaType,
+    #[error("missing or invalid uid cookie")]
+    MissingUid,
     #[error("rate-limit hit")]
     RateLimit,
     #[error("expires too far in the future")]
@@ -44,7 +46,8 @@ impl From<Error> for StatusCode {
             Error::Database(db::Error::NotFound) => StatusCode::NOT_FOUND,
             Error::Database(
                 db::Error::Delete | db::Error::Crypto(crypto::Error::ChaCha20Poly1305Decrypt),
-            ) => StatusCode::FORBIDDEN,
+            )
+            | Error::MissingUid => StatusCode::FORBIDDEN,
             Error::RateLimit => StatusCode::TOO_MANY_REQUESTS,
             Error::Database(db::Error::NoPassword)
             | Error::Id(_)

@@ -12,11 +12,15 @@ pub async fn delete(
     Path(id): Path<String>,
     State(appstate): State<AppState>,
     State(page): State<Page>,
-    Uids(uids): Uids,
+    uids: Option<Uids>,
     theme: Theme,
     lang: Lang,
 ) -> Result<Redirect, ErrorResponse> {
     async {
+        let Some(Uids(uids)) = uids else {
+            return Err(crate::Error::MissingUid);
+        };
+
         let id = id.parse()?;
         common_delete(&appstate, id, &uids).await?;
         Ok(Redirect::to("/"))
@@ -46,6 +50,23 @@ mod tests {
 
         let res = client.get(&format!("/{id}")).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_without_uid_cookie_is_forbidden() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.post_form().form(&Entry::default()).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?;
+        let id = location.replace('/', "");
+
+        let res = client.post(&format!("/delete/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let res = client.get(&format!("/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
 
         Ok(())
     }
