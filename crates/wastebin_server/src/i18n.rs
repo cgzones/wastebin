@@ -111,6 +111,8 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "index.stat.bytes" => "bytes",
     "index.button.paste" => "Paste",
     "index.button.paste.label" => "paste",
+    "heading.new_paste" => "New paste",
+    "heading.paste" => "Paste",
 
     "paste.expires_in" => "expires in",
     "paste.toast.copied_content" => "Copied content",
@@ -221,6 +223,8 @@ static DE: phf::Map<&'static str, &'static str> = phf_map! {
     "index.stat.bytes" => "Bytes",
     "index.button.paste" => "Einfügen",
     "index.button.paste.label" => "einfügen",
+    "heading.new_paste" => "Neuer Paste",
+    "heading.paste" => "Paste",
 
     "paste.expires_in" => "läuft ab in",
     "paste.toast.copied_content" => "Inhalt kopiert",
@@ -331,6 +335,9 @@ static ZH: phf::Map<&'static str, &'static str> = phf_map! {
     "index.stat.bytes" => "字节",
     "index.button.paste" => "粘贴",
     "index.button.paste.label" => "粘贴",
+
+    "heading.new_paste" => "新建剪贴",
+    "heading.paste" => "剪贴",
 
     "paste.expires_in" => "过期于",
     "paste.toast.copied_content" => "已复制内容",
