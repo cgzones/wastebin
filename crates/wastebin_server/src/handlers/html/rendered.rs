@@ -47,11 +47,15 @@ pub async fn get(
     theme: Theme,
     lang: Lang,
     accepts: Accepts,
+    method: http::Method,
     form: Result<Form<PasswordForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
+        // Same reason as the source view: `Form` reads the query string on GET and HEAD, and a
+        // password does not belong in a URL.
         let password = form
             .ok()
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
             .map(|form| Password::from(form.password.as_bytes().to_vec()));
         let no_password = password.is_none();
         let key: Key = id.parse()?;
@@ -146,6 +150,50 @@ mod tests {
         assert!(body.contains("markdown-body"), "body: {body}");
         assert!(body.contains("<h1>Hello</h1>"), "body: {body}");
         assert!(body.contains("<th>a</th>"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// The rendered view reads its password through the same query-string-capable `Form`, so it
+    /// needs the same guard as the source view.
+    #[tokio::test]
+    async fn password_is_not_taken_from_the_query_string() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let paste = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "SECRETPAYLOAD".to_string(),
+                extension: Some(String::from("md")),
+                password: Some("hunter2".to_string()),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+        let rendered = format!("/md{}", paste.path);
+
+        let body = client
+            .get(&rendered)
+            .query(&[("password", "hunter2")])
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(!body.contains("SECRETPAYLOAD"), "body: {body}");
+
+        let body = client
+            .post(&rendered)
+            .form(&[("password", "hunter2")])
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(body.contains("SECRETPAYLOAD"), "body: {body}");
 
         Ok(())
     }

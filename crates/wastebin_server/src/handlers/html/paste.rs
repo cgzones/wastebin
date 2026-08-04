@@ -72,6 +72,7 @@ pub async fn get(
     theme: Theme,
     lang: Lang,
     accepts: Accepts,
+    method: http::Method,
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     let cache = &appstate.cache;
@@ -119,8 +120,13 @@ pub async fn get(
 
     async {
         let form = form.ok().map(|Form(form)| form);
+        // `Form` reads the query string on GET and HEAD, so `?password=` unlocked the paste — and
+        // put the password into browser history, bookmarks, the same-origin `Referer` and every
+        // proxy log on the way. That is exactly what the `Password` extractor refuses for `/raw`;
+        // the prompt posts, so a request body still carries one.
         let password = form
             .as_ref()
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
             .and_then(|form| form.password.as_ref())
             .filter(|password| !password.is_empty())
             .map(|password| Password::from(password.as_bytes().to_vec()));
@@ -237,6 +243,48 @@ mod tests {
             let res = client.get(path).send().await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "path {path}");
         }
+
+        Ok(())
+    }
+
+    /// `Form` reads the query string on GET, so `?password=` used to unlock a paste — putting the
+    /// password into browser history, bookmarks, the same-origin `Referer` and every proxy log on
+    /// the way. The prompt posts, so only a request body may carry one.
+    #[tokio::test]
+    async fn password_is_not_taken_from_the_query_string() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let paste = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "SECRETPAYLOAD".to_string(),
+                password: Some("hunter2".to_string()),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let body = client
+            .get(&paste.path)
+            .query(&[("password", "hunter2")])
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(!body.contains("SECRETPAYLOAD"), "body: {body}");
+
+        // The prompt's own POST is unaffected.
+        let body = client
+            .post(&paste.path)
+            .form(&[("password", "hunter2")])
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(body.contains("SECRETPAYLOAD"), "body: {body}");
 
         Ok(())
     }
