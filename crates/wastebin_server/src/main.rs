@@ -20,8 +20,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
-    CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, SERVER, X_CONTENT_TYPE_OPTIONS,
-    X_FRAME_OPTIONS, X_XSS_PROTECTION,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SERVER, VARY,
+    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
 use tokio::net::{TcpListener, UnixListener};
@@ -169,6 +169,21 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         .headers_mut()
         .entry(CACHE_CONTROL)
         .or_insert(HeaderValue::from_static("no-store"));
+
+    // A rendered page depends on the `pref` and `uid` cookies and on the negotiated language, so
+    // its URL alone does not identify it. Assets do not vary that way and are left out, so they
+    // stay shareable between visitors. Appended rather than set, because the compression layer
+    // sits outside this one and adds `accept-encoding` of its own.
+    if response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|content_type| content_type.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with("text/html"))
+    {
+        response
+            .headers_mut()
+            .append(VARY, HeaderValue::from_static("accept-language, cookie"));
+    }
 
     (headers, response)
 }
@@ -395,7 +410,55 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::{Client, StoreCookies};
-    use http::header::X_FRAME_OPTIONS;
+    use http::header::{VARY, X_FRAME_OPTIONS};
+
+    /// Collect every `Vary` value, lowercased, across however many header lines carry them.
+    async fn vary_of(client: &Client, path: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let res = client.get(path).send().await?;
+
+        Ok(res
+            .headers()
+            .get_all(VARY)
+            .iter()
+            .filter_map(|value| value.to_str().ok())
+            .collect::<Vec<_>>()
+            .join(", ")
+            .to_lowercase())
+    }
+
+    /// The same URL renders differently per `pref`/`uid` cookie and per `Accept-Language`, so a
+    /// shared cache told only about `accept-encoding` would hand one visitor another's page.
+    #[tokio::test]
+    async fn html_varies_on_cookies_and_language() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in ["/", "/aaaaaa"] {
+            let vary = vary_of(&client, path).await?;
+
+            assert!(vary.contains("cookie"), "path {path} vary: {vary}");
+            assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
+        }
+
+        Ok(())
+    }
+
+    /// Assets are identical for every visitor; varying them on cookies would defeat sharing.
+    #[tokio::test]
+    async fn assets_do_not_vary_on_cookies() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let body = client.get("/").send().await?.text().await?;
+        let route = body
+            .split("href=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .expect("a stylesheet route");
+
+        let vary = vary_of(&client, route).await?;
+        assert!(!vary.contains("cookie"), "route {route} vary: {vary}");
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn frame_options_matches_csp_frame_ancestors() -> Result<(), Box<dyn std::error::Error>> {
