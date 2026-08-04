@@ -7,15 +7,14 @@ use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::cache::Key;
-use crate::handlers::extract::{Accepts, RequestOrigin, Theme, Uids};
-use crate::handlers::html::make_error;
+use crate::handlers::extract::Uids;
+use crate::handlers::html::{Chrome, SameSite};
 use crate::handlers::uid_cookie;
-use crate::i18n::Lang;
-use crate::{AppState, Page};
 use wastebin_core::db::write;
 
-use super::{Owner, common_insert};
+use super::common_insert;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -64,29 +63,14 @@ impl TryFrom<Entry> for write::Entry {
     }
 }
 
-#[expect(clippy::too_many_arguments)]
 pub async fn post(
     State(appstate): State<AppState>,
+    _: SameSite,
     jar: SignedCookieJar,
     uids: Option<Uids>,
-    theme: Theme,
-    lang: Lang,
-    origin: RequestOrigin,
-    accepts: Accepts,
+    chrome: Chrome,
     entry: Result<Form<Entry>, FormRejection>,
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
-    let page: Page = appstate.page.clone();
-
-    if origin.is_cross_site(&page.base_url) {
-        return Err(make_error(
-            crate::Error::CrossSite,
-            page,
-            theme,
-            lang,
-            accepts,
-        ));
-    }
-
     let entry = match entry {
         Ok(Form(entry)) => entry,
         // The body limit arrives here as a rejection like any other, but folding it into
@@ -99,7 +83,7 @@ pub async fn post(
                 crate::Error::MalformedForm
             };
 
-            return Err(make_error(error, page, theme, lang, accepts));
+            return Err(chrome.error(error));
         }
     };
 
@@ -111,10 +95,7 @@ pub async fn post(
         // `?owner=` handoff are appended behind it, so they grant deletion rights over the
         // pastes they came with but never capture what this client creates afterwards.
         let mut uids = uids.map(|Uids(uids)| uids).unwrap_or_default();
-        let owner = match uids.first().copied() {
-            Some(uid) => Owner::Existing(uid),
-            None => Owner::Mint,
-        };
+        let owner = uids.first().copied();
 
         let entry: write::Entry = entry.try_into()?;
 
@@ -141,7 +122,7 @@ pub async fn post(
         Ok((jar.add(uid_cookie(&uids)), Redirect::to(&url)))
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]

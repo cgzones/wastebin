@@ -3,20 +3,19 @@ use askama_web::WebTemplate;
 use axum::extract::{Path, State};
 
 use crate::cache::Key;
-use crate::handlers::extract::{Accepts, Theme};
+use crate::handlers::extract::Theme;
 use crate::handlers::html::qr::{code_for, dark_modules};
-use crate::handlers::html::{ErrorResponse, make_error};
+use crate::handlers::html::{Chrome, ErrorResponse};
 use crate::i18n::Lang;
+use crate::render::Renderer;
 use crate::{Database, Page};
 
 /// GET handler for the burn page.
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
-    State(page): State<Page>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    State(renderer): State<Renderer>,
+    chrome: Chrome,
 ) -> Result<Burn, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
@@ -27,18 +26,18 @@ pub async fn get(
         // enough to tell, and reading it never burns anything.
         db.get_metadata(key.id).await?;
 
-        let code = code_for(&page, &key).await?;
+        let code = code_for(&renderer, &chrome.page, &key).await?;
 
         Ok(Burn {
-            page: page.clone(),
+            page: chrome.page.clone(),
             key,
             code,
-            theme,
-            lang,
+            theme: chrome.theme,
+            lang: chrome.lang,
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 /// Burn page shown if "burn-after-reading" was selected during insertion.

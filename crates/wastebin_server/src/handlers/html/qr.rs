@@ -5,58 +5,50 @@ use qrcodegen::QrCode;
 use url::Url;
 
 use crate::cache::Key;
-use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
-use crate::handlers::html::{ErrorResponse, make_error};
+use crate::handlers::extract::{Theme, Uids, can_delete};
+use crate::handlers::html::{Chrome, ErrorResponse};
 use crate::i18n::Lang;
+use crate::render::Renderer;
 use crate::{Error, Highlighter, Page};
 use wastebin_core::db::Database;
-use wastebin_core::db::read::Metadata;
 use wastebin_core::expiration::Expiration;
 
 /// GET handler for a QR page.
-#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
-    State(page): State<Page>,
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
+    State(renderer): State<Renderer>,
     uids: Option<Uids>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
 ) -> Result<Qr, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
-        let code = code_for(&page, &key).await?;
 
-        let Metadata {
-            uid: owner_uid,
-            title,
-            expiration,
-            is_encrypted,
-            ..
-        } = db.get_metadata(key.id).await?;
+        // Establish the paste exists before encoding anything, as `/burn/` does: the encode is
+        // CPU-bound and this route has no rate limiter, so a bogus id would otherwise buy a full
+        // one for free.
+        let metadata = db.get_metadata(key.id).await?;
+        let code = code_for(&renderer, &chrome.page, &key).await?;
 
-        // Only the content is encrypted; the title is a plain column, and this view never asks for
-        // a password. `/{id}` withholds it, so showing it here handed anyone with the id the one
-        // thing the password was assumed to cover.
-        let title = (!is_encrypted).then_some(title).flatten();
+        // This view never asks for a password, so it may only render the public parts.
+        let metadata = metadata.into_public_parts();
 
         Ok(Qr {
-            page: page.clone(),
-            theme,
-            lang,
-            can_delete: can_delete(uids.as_ref(), owner_uid),
+            page: chrome.page.clone(),
+            theme: chrome.theme,
+            lang: chrome.lang,
+            can_delete: can_delete(uids.as_ref(), metadata.uid),
             is_markdown: highlighter.is_markdown(key.ext.as_deref()),
             key,
             is_available: true,
             code,
-            title,
-            expiration,
+            title: metadata.title,
+            expiration: metadata.expiration,
         })
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 /// Paste view showing the formatted paste as well as a bunch of links.
@@ -97,21 +89,22 @@ fn paste_url(base: &Url, key: &Key) -> Result<Url, Error> {
     Ok(url)
 }
 
-pub fn code_from(url: &Url, key: &Key) -> Result<QrCode, Error> {
-    Ok(QrCode::encode_text(
-        paste_url(url, key)?.as_str(),
-        qrcodegen::QrCodeEcc::High,
-    )?)
-}
-
-/// Encode the QR code for `key` off the async runtime.
-pub async fn code_for(page: &Page, key: &Key) -> Result<QrCode, Error> {
+/// Encode the QR code for `key` through the render pool.
+///
+/// Encoding is CPU-bound over a caller-supplied extension, so it goes through [`Renderer`] like
+/// highlighting does rather than spawning a blocking task an abandoned request cannot reclaim.
+pub async fn code_for(renderer: &Renderer, page: &Page, key: &Key) -> Result<QrCode, Error> {
     let page = page.clone();
     let key = key.clone();
 
-    tokio::task::spawn_blocking(move || code_from(&page.base_url, &key))
-        .await
-        .map_err(Error::from)?
+    renderer
+        .run(move || -> Result<QrCode, Error> {
+            Ok(QrCode::encode_text(
+                paste_url(&page.base_url, &key)?.as_str(),
+                qrcodegen::QrCodeEcc::High,
+            )?)
+        })
+        .await?
 }
 
 /// Return module coordinates that are dark.

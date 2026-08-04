@@ -1,41 +1,23 @@
-use axum::extract::{Query, State};
+use axum::extract::Query;
 use axum::response::IntoResponse;
 use axum_extra::extract::CookieJar;
 
-use crate::Page;
 use crate::handlers::cookie;
-use crate::handlers::extract::{Accepts, Preference, RequestOrigin, SafeReferer, Theme};
-use crate::handlers::html::{ErrorResponse, make_error};
-use crate::i18n::Lang;
+use crate::handlers::extract::{Preference, SafeReferer};
+use crate::handlers::html::{ErrorResponse, SameSite};
 
 /// POST handler to switch theme by setting the pref cookie and redirecting back to the referer.
 ///
 /// Storing the preference changes state, so it is not reachable by following a link — a
-/// prefetcher must not be able to retheme the site for a visitor.
-#[expect(clippy::too_many_arguments)]
+/// prefetcher must not be able to retheme the site for a visitor. `SameSite` is what refuses a
+/// form auto-submitted from another site, which could otherwise retheme the visitor and take a
+/// 303 to a path of its choosing on this origin as well.
 pub async fn post(
-    State(page): State<Page>,
+    _: SameSite,
     SafeReferer(redirect): SafeReferer,
-    origin: RequestOrigin,
     jar: CookieJar,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
     Query(pref): Query<Preference>,
 ) -> Result<impl IntoResponse, ErrorResponse> {
-    // The other two state-changing form routes already refuse this. Without it another site could
-    // auto-submit a form here, retheme the visitor, and take a 303 to a path of its choosing on
-    // this origin as well.
-    if origin.is_cross_site(&page.base_url) {
-        return Err(make_error(
-            crate::Error::CrossSite,
-            page,
-            theme,
-            lang,
-            accepts,
-        ));
-    }
-
     let cookie = cookie("pref", pref.pref.to_string());
 
     Ok((jar.add(cookie), redirect))

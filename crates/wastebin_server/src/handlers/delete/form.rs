@@ -1,29 +1,20 @@
 use axum::extract::{Path, State};
 use axum::response::Redirect;
 
-use crate::handlers::extract::{Accepts, RequestOrigin, Theme, Uids};
-use crate::handlers::html::{ErrorResponse, make_error};
-use crate::i18n::Lang;
-use crate::{AppState, Page};
+use crate::AppState;
+use crate::handlers::extract::Uids;
+use crate::handlers::html::{Chrome, ErrorResponse, SameSite};
 
 use super::common_delete;
 
-#[expect(clippy::too_many_arguments)]
 pub async fn delete(
     Path(id): Path<String>,
     State(appstate): State<AppState>,
-    State(page): State<Page>,
+    _: SameSite,
     uids: Option<Uids>,
-    theme: Theme,
-    lang: Lang,
-    origin: RequestOrigin,
-    accepts: Accepts,
+    chrome: Chrome,
 ) -> Result<Redirect, ErrorResponse> {
     async {
-        if origin.is_cross_site(&page.base_url) {
-            return Err(crate::Error::CrossSite);
-        }
-
         let Some(Uids(uids)) = uids else {
             return Err(crate::Error::MissingUid);
         };
@@ -33,7 +24,7 @@ pub async fn delete(
         Ok(Redirect::to("/"))
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
 
-use axum::extract::{DefaultBodyLimit, FromRef, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRef, Request};
 use axum::http::{HeaderName, HeaderValue, StatusCode};
 use axum::middleware::{Next, from_fn, from_fn_with_state};
 use axum::response::{IntoResponse, Response};
@@ -32,9 +32,8 @@ use tower_http::trace::{MakeSpan, TraceLayer};
 
 use crate::cache::Cache;
 use crate::errors::Error;
-use crate::handlers::extract::{Accepts, Theme};
+use crate::handlers::html::Chrome;
 use crate::handlers::{delete, download, health, html, insert, raw, robots, theme};
-use crate::i18n::Lang;
 use crate::render::Renderer;
 use wastebin_core::db::Database;
 use wastebin_core::env as core_env;
@@ -45,7 +44,7 @@ pub(crate) type Page = Arc<page::Page>;
 /// Reference counted [`highlight::Highlighter`] wrapper.
 pub(crate) type Highlighter = Arc<wastebin_highlight::Highlighter>;
 
-#[derive(Clone)]
+#[derive(Clone, FromRef)]
 pub(crate) struct AppState {
     db: Database,
     cache: Cache,
@@ -53,45 +52,14 @@ pub(crate) struct AppState {
     page: Page,
     highlighter: Highlighter,
     renderer: Renderer,
+    // Skipped: all three share a type, so deriving would emit conflicting impls. The password
+    // limiter is reached through the `PasswordRatelimit` newtype instead.
+    #[from_ref(skip)]
     ratelimit_insert: Option<Arc<Ratelimiter>>,
+    #[from_ref(skip)]
     ratelimit_delete: Option<Arc<Ratelimiter>>,
+    #[from_ref(skip)]
     ratelimit_password: Option<Arc<Ratelimiter>>,
-}
-
-impl FromRef<AppState> for Key {
-    fn from_ref(state: &AppState) -> Self {
-        state.key.clone()
-    }
-}
-
-impl FromRef<AppState> for Highlighter {
-    fn from_ref(state: &AppState) -> Self {
-        state.highlighter.clone()
-    }
-}
-
-impl FromRef<AppState> for Page {
-    fn from_ref(state: &AppState) -> Self {
-        state.page.clone()
-    }
-}
-
-impl FromRef<AppState> for Database {
-    fn from_ref(state: &AppState) -> Self {
-        state.db.clone()
-    }
-}
-
-impl FromRef<AppState> for Cache {
-    fn from_ref(state: &AppState) -> Self {
-        state.cache.clone()
-    }
-}
-
-impl FromRef<AppState> for Renderer {
-    fn from_ref(state: &AppState) -> Self {
-        state.renderer.clone()
-    }
 }
 
 /// Request span that records the path but not the query string.
@@ -213,14 +181,7 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
     (headers, response)
 }
 
-async fn handle_service_errors(
-    State(page): State<Page>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
-    req: Request,
-    next: Next,
-) -> Response {
+async fn handle_service_errors(chrome: Chrome, req: Request, next: Next) -> Response {
     // `answer_options` answers OPTIONS out of the same 405, so rendering a page here would only
     // build one for it to throw away. The status is what it matches on, and that survives either
     // way — this just skips the wasted render.
@@ -249,7 +210,7 @@ async fn handle_service_errors(
     // The `Allow` a 405 is required to carry is not on `response` yet: axum attaches it as the
     // inner router completes, after this layer has already run, so the rendered page inherits it
     // without anything being carried over by hand.
-    html::make_error(error, page, theme, lang, accepts).into_response()
+    chrome.error(error).into_response()
 }
 
 /// Answer `OPTIONS` from the `Allow` list the router already computes.
@@ -298,13 +259,8 @@ async fn answer_options(req: Request, next: Next) -> Response {
 ///
 /// Without one, axum answers a bare 404 with an empty body, which is the only failure on the site
 /// that does not look like the rest of it.
-async fn handle_not_found(
-    State(page): State<Page>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
-) -> Response {
-    html::make_error(Error::RouteNotFound, page, theme, lang, accepts).into_response()
+async fn handle_not_found(chrome: Chrome) -> Response {
+    chrome.error(Error::RouteNotFound).into_response()
 }
 
 /// Build a rate limiter refilling `per_second` tokens every second.

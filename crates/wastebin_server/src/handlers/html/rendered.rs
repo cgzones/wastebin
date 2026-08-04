@@ -7,14 +7,12 @@ use axum::extract::{Form, Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
-use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
+use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasteForm;
-use crate::handlers::html::{BurnConfirmation, ErrorResponse, make_error, password_input};
+use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read};
 use crate::i18n::Lang;
 use crate::{Cache, Database, Highlighter, Page};
-use wastebin_core::crypto::Password;
-use wastebin_core::db;
-use wastebin_core::db::read::{Data, Entry, Metadata};
+use wastebin_core::db::read::Metadata;
 use wastebin_core::expiration::Expiration;
 use wastebin_highlight::markdown;
 
@@ -38,93 +36,49 @@ pub(crate) struct Rendered {
 #[expect(clippy::too_many_arguments)]
 pub async fn get(
     State(cache): State<Cache>,
-    State(page): State<Page>,
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
     State(render_pool): State<crate::render::Renderer>,
     State(ratelimit): State<crate::handlers::PasswordRatelimit>,
     Path(id): Path<String>,
     uids: Option<Uids>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
     method: http::Method,
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
-        // Same reason as the source view: `Form` reads the query string on GET and HEAD, and a
-        // password does not belong in a URL.
+        // Same reason as the source view: `Form` reads the query string on GET and HEAD, so
+        // neither a password nor a burn confirmation may be taken from one there.
         let form = form
             .ok()
             .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
-        let password = form
-            .as_ref()
-            .and_then(|Form(form)| form.password.as_ref())
-            // An empty field is no password at all: it derives nothing, yet it cost a token and
-            // pushed the request off the cache on both the read and the write side.
-            .filter(|password| !password.is_empty())
-            .map(|password| Password::from(password.as_bytes().to_vec()));
-        let confirmed = form
-            .as_ref()
-            .and_then(|Form(form)| form.confirm_burn.as_deref())
-            == Some("1");
-        let no_password = password.is_none();
-
         let key: Key = id.parse()?;
-        let metadata = db.get_metadata(key.id).await?;
 
-        // This view destroys the paste just as the source view does, so it has to ask first —
-        // otherwise anything that follows the URL, including an image in someone else's rendered
-        // paste, destroys it on the reader's behalf.
-        if metadata.must_be_deleted && !confirmed {
-            return Ok(BurnConfirmation {
-                page: page.clone(),
-                theme,
-                lang,
-                action: format!("/md/{key}"),
-                title: (!metadata.is_encrypted)
-                    .then(|| metadata.title.clone())
-                    .flatten(),
-            }
-            .into_response());
+        let read = PasteReader {
+            db: &db,
+            cache: &cache,
+            renderer: &render_pool,
+            ratelimit: &ratelimit,
+            chrome: &chrome,
+            highlighter: &highlighter,
+            mode: Mode::Rendered,
         }
+        .read(
+            id,
+            &key,
+            form.map(|Form(form)| form),
+            format!("/md/{key}"),
+            |text, _, highlighter| markdown::render(&text, &highlighter),
+        )
+        .await?;
 
-        // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
-        if !no_password && metadata.is_encrypted {
-            ratelimit.check()?;
-        }
-
-        // A cached render implies the paste was available and unencrypted when stored, so its
-        // metadata is all that is still needed — reading the body back would only waste a
-        // decompression of bytes we immediately drop.
-        let cached = no_password
-            .then(|| cache.get(&key, Mode::Rendered))
-            .flatten();
-
-        let (html, is_available, metadata) = if let Some(cached) = cached {
-            tracing::trace!(?key, "found cached rendered markdown");
-            (cached, true, metadata)
-        } else {
-            let (data, is_available) = match db.get(key.id, password).await {
-                Ok(Entry::Regular(data)) => (data, true),
-                Ok(Entry::Burned(data)) => (data, false),
-                Err(db::Error::NoPassword) => return Ok(password_input(&page, theme, lang, id)),
-                Err(err) => return Err(err.into()),
-            };
-
-            let Data { text, metadata } = data;
-            let highlighter = highlighter.clone();
-            let rendered: Arc<str> = render_pool
-                .run(move || markdown::render(&text, &highlighter))
-                .await??
-                .into_inner();
-
-            if is_available && no_password {
-                tracing::trace!(?key, "cache rendered markdown");
-                cache.put(&key, Mode::Rendered, Arc::clone(&rendered));
-            }
-
-            (rendered, is_available, metadata)
+        let PasteView {
+            html,
+            is_available,
+            metadata,
+        } = match read {
+            Read::Paste(view) => view,
+            Read::Other(response) => return Ok(response),
         };
 
         let Metadata {
@@ -135,11 +89,11 @@ pub async fn get(
         } = metadata;
 
         let rendered = Rendered {
-            page: page.clone(),
+            page: chrome.page.clone(),
             can_delete: can_delete(uids.as_ref(), owner_uid),
             key,
-            theme,
-            lang,
+            theme: chrome.theme,
+            lang: chrome.lang,
             is_available,
             is_markdown: true,
             expiration,
@@ -150,7 +104,7 @@ pub async fn get(
         Ok(rendered.into_response())
     }
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]

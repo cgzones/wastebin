@@ -10,7 +10,7 @@ use crate::errors::JsonErrorResponse;
 use crate::handlers::extract::{sign_owner_token, verify_owner_token};
 use wastebin_core::db::write;
 
-use super::{Owner, common_insert};
+use super::common_insert;
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -60,14 +60,10 @@ pub async fn post(
     // pastes under one identity; otherwise mint a fresh uid. A raw uid is never
     // trusted — only a server-signed token is accepted, and an invalid one falls
     // back to minting rather than failing the request.
-    let owner = match entry
+    let owner = entry
         .owner
         .as_deref()
-        .and_then(|token| verify_owner_token(&key, token))
-    {
-        Some(uid) => Owner::Existing(uid),
-        None => Owner::Mint,
-    };
+        .and_then(|token| verify_owner_token(&key, token));
 
     let entry: write::Entry = entry.into();
 

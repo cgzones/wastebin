@@ -5,57 +5,26 @@ use axum::http::header;
 use axum::response::{IntoResponse, Response};
 use axum_extra::headers::HeaderValue;
 
-use crate::Page;
 use crate::cache::Key;
-use crate::handlers::PasswordRatelimit;
-use crate::handlers::extract::{Accepts, Password, Theme};
-use crate::handlers::html::{ErrorResponse, make_error, password_input};
-use crate::i18n::Lang;
-use wastebin_core::db::read::{Data, Entry};
-use wastebin_core::db::{self, Database};
+use crate::handlers::extract::Password;
+use crate::handlers::html::{Chrome, ErrorResponse};
+use crate::handlers::{PasswordRatelimit, serve_bytes};
+use wastebin_core::db::Database;
+use wastebin_core::db::read::Data;
 
 /// GET handler for raw content of a paste.
-#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
-    State(page): State<Page>,
     State(ratelimit): State<PasswordRatelimit>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
-    async {
-        let key: Key = id.parse()?;
-        let password = password.map(|Password(password)| password);
-
-        let metadata = db.get_metadata(key.id).await?;
-
-        // A download is a GET with no way to confirm the destruction; see `raw::get`.
-        if metadata.must_be_deleted {
-            return Err(crate::Error::BurnNotConfirmed);
-        }
-
-        // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
-        if password.is_some() && metadata.is_encrypted {
-            ratelimit.check()?;
-        }
-
-        match db.get(key.id, password).await {
-            Ok(Entry::Regular(data) | Entry::Burned(data)) => {
-                Ok(get_download(&key, data).into_response())
-            }
-            // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on
-            // an HTML form and would only see a 200 where it expected the paste.
-            Err(db::Error::NoPassword) if accepts == Accepts::Html => {
-                Ok(password_input(&page, theme, lang, key.id.to_string()))
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
+    serve_bytes(&db, &ratelimit, &chrome, id, password, |key, data| {
+        get_download(key, data).into_response()
+    })
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 /// Return `true` if `c` reorders the text around it rather than showing a glyph of its own.

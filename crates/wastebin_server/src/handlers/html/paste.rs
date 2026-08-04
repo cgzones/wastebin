@@ -10,14 +10,12 @@ use axum_extra::extract::cookie::Key as CookieKey;
 use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
-use crate::handlers::extract::{Accepts, Theme, Uids, can_delete, verify_owner_token};
-use crate::handlers::html::{BurnConfirmation, ErrorResponse, make_error, password_input};
+use crate::handlers::extract::{Theme, Uids, can_delete, verify_owner_token};
+use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read};
 use crate::handlers::{PasswordRatelimit, uid_cookie};
 use crate::i18n::Lang;
 use crate::{AppState, Page};
-use wastebin_core::crypto::Password;
-use wastebin_core::db;
-use wastebin_core::db::read::{Data, Entry, Metadata};
+use wastebin_core::db::read::Metadata;
 use wastebin_core::expiration::Expiration;
 
 /// Magic-link handoff: when a paste was created via the JSON API, the response contains a signed
@@ -69,14 +67,11 @@ pub async fn get(
     Query(handoff): Query<OwnerHandoff>,
     jar: SignedCookieJar,
     uids: Option<Uids>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
     method: http::Method,
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     let cache = &appstate.cache;
-    let page = &appstate.page;
     let db = &appstate.db;
     let highlighter = &appstate.highlighter;
 
@@ -100,7 +95,7 @@ pub async fn get(
             let own_uid = db
                 .next_uid()
                 .await
-                .map_err(|err| make_error(err.into(), page.clone(), theme, lang, accepts))?;
+                .map_err(|err| chrome.error(err.into()))?;
             new_uids.push(own_uid);
         }
 
@@ -109,40 +104,24 @@ pub async fn get(
         }
         // Redirect to the parsed key rather than the raw path, which is otherwise free to
         // steer the `Location` header off-site.
-        let key: Key = id.parse().map_err(|_| {
-            make_error(
-                crate::Error::RouteNotFound,
-                page.clone(),
-                theme,
-                lang,
-                accepts,
-            )
-        })?;
+        let key: Key = id
+            .parse()
+            .map_err(|_| chrome.error(crate::Error::RouteNotFound))?;
         let cookie = uid_cookie(&new_uids);
         return Ok((jar.add(cookie), Redirect::to(&format!("/{key}"))).into_response());
     }
 
     async {
-        let form = form.ok().map(|Form(form)| form);
         // `Form` reads the query string on GET and HEAD, so `?password=` unlocked the paste — and
         // put the password into browser history, bookmarks, the same-origin `Referer` and every
         // proxy log on the way. That is exactly what the `Password` extractor refuses for `/raw`;
-        // the prompt posts, so a request body still carries one.
-        let password = form
-            .as_ref()
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
-            .and_then(|form| form.password.as_ref())
-            .filter(|password| !password.is_empty())
-            .map(|password| Password::from(password.as_bytes().to_vec()));
-        // Same reasoning as the password above: read from the query string, the confirmation is
-        // set by anything that merely follows a link, so an `<img>` or a prefetch burnt the paste.
-        let confirmed = form
-            .as_ref()
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
-            .and_then(|form| form.confirm_burn.as_deref())
-            == Some("1");
-        let no_password = password.is_none();
-
+        // the prompt posts, so a request body still carries one. `?confirm_burn=1` is the same
+        // story: set by anything that merely follows a link, so an `<img>` or a prefetch burnt the
+        // paste. Dropping the whole form for those methods covers both fields at once.
+        let form = form
+            .ok()
+            .map(|Form(form)| form)
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
         // This route is also every single-segment path no other route claimed, so a value that is
         // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
         // "that is not a valid paste identifier" described a paste the visitor never asked for.
@@ -150,62 +129,32 @@ pub async fn get(
         // saying so, since there the caller did mean to address one.
         let key: Key = id.parse().map_err(|_| crate::Error::RouteNotFound)?;
 
-        let metadata = match db.get_metadata(key.id).await {
-            Ok(metadata) => metadata,
-            Err(err) => return Err(err.into()),
-        };
-
-        // Only an attempt that reaches argon2 is worth a token; see `raw::get`. The metadata read
-        // above already settled whether this paste can derive anything.
-        if !no_password && metadata.is_encrypted {
-            PasswordRatelimit::from_ref(&appstate).check()?;
+        let ratelimit = PasswordRatelimit::from_ref(&appstate);
+        let read = PasteReader {
+            db,
+            cache,
+            renderer: &appstate.renderer,
+            ratelimit: &ratelimit,
+            chrome: &chrome,
+            highlighter,
+            mode: Mode::Source,
         }
+        .read(
+            id,
+            &key,
+            form,
+            format!("/{key}"),
+            |text, ext, highlighter| highlighter.highlight(text, ext),
+        )
+        .await?;
 
-        if metadata.must_be_deleted && !confirmed {
-            return Ok(BurnConfirmation {
-                page: page.clone(),
-                theme,
-                lang,
-                action: format!("/{key}"),
-                // The interstitial comes before any password is asked for, and the title is not
-                // encrypted along with the content.
-                title: (!metadata.is_encrypted)
-                    .then(|| metadata.title.clone())
-                    .flatten(),
-            }
-            .into_response());
-        }
-
-        // An entry is only ever cached while it was available and unencrypted, so a hit can be
-        // served from metadata alone — no need to read and decompress the body just to drop it.
-        let cached = no_password.then(|| cache.get(&key, Mode::Source)).flatten();
-
-        let (html, is_available, metadata) = if let Some(html) = cached {
-            tracing::trace!(?key, "found cached item");
-            (html, true, metadata)
-        } else {
-            let (data, is_available) = match db.get(key.id, password).await {
-                Ok(Entry::Regular(data)) => (data, true),
-                Ok(Entry::Burned(data)) => (data, false),
-                Err(db::Error::NoPassword) => return Ok(password_input(page, theme, lang, id)),
-                Err(err) => return Err(err.into()),
-            };
-
-            let Data { text, metadata } = data;
-            let ext = key.ext.clone();
-            let highlighter = highlighter.clone();
-            let html: Arc<str> = appstate
-                .renderer
-                .run(move || highlighter.highlight(text, ext))
-                .await??
-                .into_inner();
-
-            if is_available && no_password {
-                tracing::trace!(?key, "cache item");
-                cache.put(&key, Mode::Source, Arc::clone(&html));
-            }
-
-            (html, is_available, metadata)
+        let PasteView {
+            html,
+            is_available,
+            metadata,
+        } = match read {
+            Read::Paste(view) => view,
+            Read::Other(response) => return Ok(response),
         };
 
         let Metadata {
@@ -216,12 +165,12 @@ pub async fn get(
         } = metadata;
 
         let paste = Paste {
-            page: page.clone(),
+            page: chrome.page.clone(),
             can_delete: can_delete(uids.as_ref(), owner_uid),
             is_markdown: highlighter.is_markdown(key.ext.as_deref()),
             key,
-            theme,
-            lang,
+            theme: chrome.theme,
+            lang: chrome.lang,
             is_available,
             expiration,
             html,
@@ -231,7 +180,7 @@ pub async fn get(
         Ok(paste.into_response())
     }
     .await
-    .map_err(|err| make_error(err, appstate.page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]

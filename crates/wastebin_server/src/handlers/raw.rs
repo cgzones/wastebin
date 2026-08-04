@@ -1,64 +1,29 @@
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 
-use crate::cache::Key;
-use crate::handlers::PasswordRatelimit;
-use crate::handlers::extract::{Accepts, Password, Theme};
-use crate::handlers::html::{ErrorResponse, make_error, password_input};
-use crate::i18n::Lang;
-use crate::{Database, Page};
-use wastebin_core::db;
-use wastebin_core::db::read::Entry;
+use crate::Database;
+use crate::handlers::extract::Password;
+use crate::handlers::html::{Chrome, ErrorResponse};
+use crate::handlers::{PasswordRatelimit, serve_bytes};
 
 /// GET handler for raw content of a paste.
-#[expect(clippy::too_many_arguments)]
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
-    State(page): State<Page>,
     State(ratelimit): State<PasswordRatelimit>,
-    theme: Theme,
-    lang: Lang,
-    accepts: Accepts,
+    chrome: Chrome,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
-    async {
-        let password = password.map(|Password(password)| password);
-        let key: Key = id.parse()?;
-
-        let metadata = db.get_metadata(key.id).await?;
-
-        // This route is a GET that returns bytes, so there is nowhere to confirm the destruction
-        // and nothing stopping anything that merely follows a URL from triggering it. The content
-        // stays reachable through the paste page, which does ask first.
-        if metadata.must_be_deleted {
-            return Err(crate::Error::BurnNotConfirmed);
-        }
-
-        // Only an attempt that reaches argon2 is worth a token. The bucket is a single
-        // process-wide one with no refund, so letting a password for a missing or unencrypted
-        // paste spend one let anyone lock every user out of every encrypted paste for free.
-        if password.is_some() && metadata.is_encrypted {
-            ratelimit.check()?;
-        }
-
-        match db.get(key.id, password).await {
-            Ok(Entry::Regular(data) | Entry::Burned(data)) => Ok(data.text.into_response()),
-            // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on
-            // an HTML form and would only see a 200 where it expected the paste.
-            Err(db::Error::NoPassword) if accepts == Accepts::Html => {
-                Ok(password_input(&page, theme, lang, key.id.to_string()))
-            }
-            Err(err) => Err(err.into()),
-        }
-    }
+    serve_bytes(&db, &ratelimit, &chrome, id, password, |_, data| {
+        data.text.into_response()
+    })
     .await
-    .map_err(|err| make_error(err, page, theme, lang, accepts))
+    .map_err(|err| chrome.error(err))
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, StoreCookies, one_token_limiter};
     use reqwest::{StatusCode, header};
 
     /// Every password attempt runs a full argon2 derivation before the ciphertext is looked at, so
@@ -66,12 +31,7 @@ mod tests {
     /// an anonymous caller could ask for.
     #[tokio::test]
     async fn password_attempts_are_rate_limited() -> Result<(), Box<dyn std::error::Error>> {
-        let limiter = std::sync::Arc::new(
-            ratelimit::Ratelimiter::builder(1)
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
 
         let paste = client
@@ -116,12 +76,7 @@ mod tests {
     #[tokio::test]
     async fn a_password_for_no_derivation_keeps_its_token() -> Result<(), Box<dyn std::error::Error>>
     {
-        let limiter = std::sync::Arc::new(
-            ratelimit::Ratelimiter::builder(1)
-                .max_tokens(1)
-                .initial_available(1)
-                .build()?,
-        );
+        let limiter = one_token_limiter();
         let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
 
         let secret = client

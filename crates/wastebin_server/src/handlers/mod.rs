@@ -15,10 +15,15 @@ use std::time::Instant;
 use std::sync::Arc;
 
 use axum::extract::FromRef;
+use axum::response::Response;
 use axum_extra::extract::cookie::{Cookie, SameSite};
 use ratelimit::Ratelimiter;
+use wastebin_core::db::read::{Data, Entry};
+use wastebin_core::db::{self, Database};
 
-use crate::handlers::extract::serialize_uids;
+use crate::cache::Key;
+use crate::handlers::extract::{Accepts, Password, serialize_uids};
+use crate::handlers::html::Chrome;
 use crate::{AppState, Error};
 
 static START: LazyLock<Instant> = LazyLock::new(Instant::now);
@@ -71,6 +76,49 @@ impl PasswordRatelimit {
         static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
 
         check_ratelimit(self.0.as_deref(), &RL_LOGGED, "password attempts")
+    }
+}
+
+/// Serve a paste's bytes for a route that answers with content rather than a page.
+///
+/// `/raw` and `/dl` differ only in how they wrap the entry, so the burn refusal, the password rate
+/// limit and the HTML-prompt fallback live here rather than in each: a further bytes route gets
+/// all three by calling this instead of restating them, and cannot quietly drop one.
+pub(crate) async fn serve_bytes(
+    db: &Database,
+    ratelimit: &PasswordRatelimit,
+    chrome: &Chrome,
+    id: String,
+    password: Option<Password>,
+    respond: impl FnOnce(&Key, Data) -> Response,
+) -> Result<Response, Error> {
+    let password = password.map(|Password(password)| password);
+    let key: Key = id.parse()?;
+
+    let metadata = db.get_metadata(key.id).await?;
+
+    // These routes are GETs that return bytes, so there is nowhere to confirm the destruction and
+    // nothing stopping anything that merely follows a URL from triggering it. The content stays
+    // reachable through the paste page, which does ask first.
+    if metadata.must_be_deleted {
+        return Err(Error::BurnNotConfirmed);
+    }
+
+    // Only an attempt that reaches argon2 is worth a token. The bucket is a single process-wide
+    // one with no refund, so letting a password for a missing or unencrypted paste spend one let
+    // anyone lock every user out of every encrypted paste for free.
+    if password.is_some() && metadata.is_encrypted {
+        ratelimit.check()?;
+    }
+
+    match db.get(key.id, password).await {
+        Ok(Entry::Regular(data) | Entry::Burned(data)) => Ok(respond(&key, data)),
+        // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on an
+        // HTML form and would only see a 200 where it expected the paste.
+        Err(db::Error::NoPassword) if chrome.accepts == Accepts::Html => {
+            Ok(chrome.password_input(key.id.to_string()))
+        }
+        Err(err) => Err(err.into()),
     }
 }
 

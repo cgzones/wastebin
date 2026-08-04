@@ -60,18 +60,14 @@ fn sanitize_title(title: &str) -> Option<String> {
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
-/// Which identity a new paste is filed under.
-pub(crate) enum Owner {
-    /// An identity the client already holds, from its cookie or a signed `owner` token.
-    Existing(i64),
-    /// No identity yet, so one is minted — but only once the entry is known to be acceptable.
-    Mint,
-}
-
+/// Store `entry`, filed under `owner`.
+///
+/// `owner` is the identity the client already holds, from its cookie or a signed `owner` token;
+/// `None` mints a fresh one — but only once the entry is known to be acceptable.
 async fn common_insert(
     appstate: &AppState,
     mut entry: write::Entry,
-    owner: Owner,
+    owner: Option<i64>,
 ) -> Result<(Id, write::Entry, i64), Error> {
     static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
 
@@ -111,8 +107,8 @@ async fn common_insert(
     // single-threaded actor first: minting ran ahead of every check above, and ahead of the
     // limiter, so rejected inserts moved the counter with nothing accounting for them.
     let uid = match owner {
-        Owner::Existing(uid) => uid,
-        Owner::Mint => appstate.db.next_uid().await?,
+        Some(uid) => uid,
+        None => appstate.db.next_uid().await?,
     };
     entry.uid = Some(uid);
 
