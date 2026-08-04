@@ -124,7 +124,7 @@ enum Command {
     },
     GetMetadata {
         id: Id,
-        result: oneshot::Sender<Result<(Metadata, bool), Error>>,
+        result: oneshot::Sender<Result<Metadata, Error>>,
     },
     Take {
         id: Id,
@@ -271,8 +271,6 @@ pub mod read {
         pub data: Vec<u8>,
         /// Metadata
         pub metadata: Metadata,
-        /// Entry is expired
-        pub expired: bool,
         /// Nonce for this entry
         pub nonce: Option<XNonce>,
         /// Salt this entry was sealed under. `None` for entries stored before each carried one,
@@ -579,19 +577,34 @@ impl Handler {
         }
     }
 
-    /// Read a row's metadata along with whether it has already expired.
-    fn get_metadata(&self, id: Id) -> Result<(Metadata, bool), Error> {
-        let metadata = self.conn.query_row(
+    /// Drop `id` if it has already expired, reporting it as [`Error::NotFound`].
+    ///
+    /// An expired row is indistinguishable from a missing one to every caller, and settling that
+    /// here — where the connection is — keeps each read path from re-deciding it and spares the
+    /// round trip a second command would cost.
+    fn evict_if_expired(&self, id: Id, expired: bool) -> Result<(), Error> {
+        if expired {
+            self.take(id)?;
+            return Err(Error::NotFound);
+        }
+
+        Ok(())
+    }
+
+    fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
+        let (metadata, expired) = self.conn.query_row(
             concat!("SELECT ", metadata_columns!(), " FROM entries WHERE id=?1"),
             params![id.to_i64()],
             metadata_from_row,
         )?;
 
+        self.evict_if_expired(id, expired)?;
+
         Ok(metadata)
     }
 
     fn get(&self, id: Id) -> Result<DatabaseEntry, Error> {
-        let entry = self.conn.query_row(
+        let (entry, expired) = self.conn.query_row(
             concat!(
                 "SELECT ",
                 metadata_columns!(),
@@ -625,15 +638,19 @@ impl Handler {
                         )
                     })?;
 
-                Ok(read::DatabaseEntry {
-                    data: row.get(6)?,
-                    metadata,
-                    nonce,
+                Ok((
+                    read::DatabaseEntry {
+                        data: row.get(6)?,
+                        metadata,
+                        nonce,
+                        salt,
+                    },
                     expired,
-                    salt,
-                })
+                ))
             },
         )?;
+
+        self.evict_if_expired(id, expired)?;
 
         Ok(entry)
     }
@@ -772,13 +789,10 @@ impl Database {
     }
 
     /// Get entire entry for `id`.
+    ///
+    /// An expired entry is dropped by the handler and reported as [`Error::NotFound`].
     pub async fn get(&self, id: Id, password: Option<Password>) -> Result<read::Entry, Error> {
         let entry = self.call(|result| Command::Get { id, result }).await?;
-
-        if entry.expired {
-            self.delete(id).await?;
-            return Err(Error::NotFound);
-        }
 
         let data = entry
             .decrypt(password, &self.salt)
@@ -805,21 +819,8 @@ impl Database {
     /// Expired entries are deleted and reported as [`Error::NotFound`], matching [`Self::get`],
     /// so callers can rely on metadata alone to decide a paste is still servable.
     pub async fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
-        let (metadata, expired) = self
-            .call(|result| Command::GetMetadata { id, result })
-            .await?;
-
-        if expired {
-            self.delete(id).await?;
-            return Err(Error::NotFound);
-        }
-
-        Ok(metadata)
-    }
-
-    /// Delete paste with `id`.
-    async fn delete(&self, id: Id) -> Result<(), Error> {
-        self.take(id).await.map(drop)
+        self.call(|result| Command::GetMetadata { id, result })
+            .await
     }
 
     /// Delete paste with `id`, reporting whether this call removed it.
@@ -1102,17 +1103,26 @@ mod tests {
     async fn expired_does_not_exist() -> Result<(), Box<dyn std::error::Error>> {
         let db = new_db()?;
 
-        let entry = write::Entry {
+        let expiring = || write::Entry {
             expires: Some(NonZeroU32::new(1).unwrap()),
             ..Default::default()
         };
 
-        let (id, _entry) = db.insert(entry).await?;
+        // Two entries, so each read path meets a row that is still present but expired — reading
+        // one evicts it, which would otherwise leave the other path testing a missing row instead.
+        let (id, _entry) = db.insert(expiring()).await?;
+        let (metadata_id, _entry) = db.insert(expiring()).await?;
 
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        tokio::time::sleep(tokio::time::Duration::from_millis(2500)).await;
 
-        let result = db.get(id, None).await;
-        assert!(matches!(result, Err(Error::NotFound)));
+        assert!(matches!(db.get(id, None).await, Err(Error::NotFound)));
+
+        // Metadata alone has to be enough to decide a paste is gone, or a view that only consults
+        // it would keep serving an expired paste's title.
+        assert!(matches!(
+            db.get_metadata(metadata_id).await,
+            Err(Error::NotFound)
+        ));
 
         Ok(())
     }
@@ -1124,8 +1134,11 @@ mod tests {
         let (id, _entry) = db.insert(write::Entry::default()).await?;
 
         assert!(db.get(id, None).await.is_ok());
-        assert!(db.delete(id).await.is_ok());
+        // The row was there, so this call is the one that removed it.
+        assert!(db.take(id).await?);
         assert!(db.get(id, None).await.is_err());
+        // ..and a second removal has nothing left to report.
+        assert!(!db.take(id).await?);
 
         Ok(())
     }
