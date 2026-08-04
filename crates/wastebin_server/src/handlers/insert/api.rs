@@ -308,6 +308,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn password_in_the_query_string_is_ignored() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let password = "SuperSecretPassword";
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            password: Some(password.to_string()),
+            ..Default::default()
+        };
+
+        let payload = client
+            .post_json()
+            .json(&entry)
+            .send()
+            .await?
+            .json::<super::RedirectResponse>()
+            .await?;
+
+        let res = client
+            .get(&format!("/raw{}?password={password}", payload.path))
+            .send()
+            .await?;
+
+        let body = res.text().await?;
+        assert!(!body.contains("FooBarBaz"), "content served: {body}");
+
+        // The documented way to send one with a GET still works.
+        let res = client
+            .get(&format!("/raw{}", payload.path))
+            .header(PASSWORD_HEADER_NAME, password)
+            .send()
+            .await?;
+        assert_eq!(res.text().await?, "FooBarBaz");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn insert_encrypted() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
         let password = "SuperSecretPassword";
