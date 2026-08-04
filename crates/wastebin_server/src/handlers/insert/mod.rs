@@ -1,5 +1,6 @@
 use std::sync::atomic::AtomicU64;
 
+use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
 use wastebin_core::{db::write, id::Id};
 
 use crate::AppState;
@@ -10,9 +11,58 @@ use crate::handlers::check_ratelimit;
 pub mod api;
 pub mod form;
 
+/// Longest title kept, in characters.
+///
+/// The title is shown back on the paste page and handed to the browser as the download filename,
+/// so its length lands in a response header. Nothing bounded it: a 900k-character title built a
+/// 1.8 MB `content-disposition`, which clients with a header cap answer by dropping the whole
+/// header block — the security headers with it — and which reverse proxies reject outright.
+const MAX_TITLE_CHARS: usize = 80;
+
+/// Return `title` with everything unfit for a filename removed, or `None` if nothing is left.
+///
+/// A title is read by whoever opens the paste and reused as a filename, so the characters that
+/// hide or reorder what follows them do not belong in it: an override can make `report<RLO>gnp.exe`
+/// read as `report exe.png`. Dropping rather than rejecting keeps a paste whose title merely picked
+/// up a stray character from failing outright.
+fn sanitize_title(title: &str) -> Option<String> {
+    // Neither bound can be exceeded: the result drops characters and never adds any, and it stops
+    // at `MAX_TITLE_CHARS` of at most four bytes each.
+    let mut sanitized = String::with_capacity(title.len().min(MAX_TITLE_CHARS * 4));
+    sanitized.extend(
+        title
+            .chars()
+            .filter(|&c| {
+                !matches!(
+                    c.general_category(),
+                    // Control and format characters: bidi overrides and isolates, zero-width joiners,
+                    // interlinear annotation, the deprecated format characters.
+                    GeneralCategory::Control
+                    | GeneralCategory::Format
+                    // Nothing renders these, and their meaning is per-installation.
+                    | GeneralCategory::PrivateUse
+                    // Unassigned covers the noncharacters too.
+                    | GeneralCategory::Unassigned
+                    // A title is one line.
+                    | GeneralCategory::LineSeparator
+                    | GeneralCategory::ParagraphSeparator
+                )
+            })
+            .take(MAX_TITLE_CHARS),
+    );
+
+    // Trimmed in place rather than by copying the trimmed slice back out: the padding sits at the
+    // ends, so the buffer just built already holds the answer.
+    sanitized.truncate(sanitized.trim_end().len());
+    let leading = sanitized.len() - sanitized.trim_start().len();
+    sanitized.drain(..leading);
+
+    (!sanitized.is_empty()).then_some(sanitized)
+}
+
 async fn common_insert(
     appstate: &AppState,
-    entry: write::Entry,
+    mut entry: write::Entry,
 ) -> Result<(Id, write::Entry), Error> {
     static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
 
@@ -38,6 +88,9 @@ async fn common_insert(
     {
         return Err(TooLongExpires);
     }
+
+    // Both routes funnel through here, so neither can be the one that forgets.
+    entry.title = entry.title.as_deref().and_then(sanitize_title);
 
     check_ratelimit(
         appstate.ratelimit_insert.as_deref(),
@@ -76,6 +129,122 @@ mod tests {
             let res = client.post_json().json(&data).send().await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "json text {text:?}");
         }
+
+        Ok(())
+    }
+
+    /// The title doubles as the download filename, and nothing bounded it: a 900k-character one
+    /// produced a 1.8 MB `content-disposition`, past the header cap of every client that has one —
+    /// which then dropped the whole header block, security headers included.
+    #[tokio::test]
+    async fn an_overlong_title_is_cut_to_the_limit() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let data = crate::handlers::insert::api::Entry {
+            text: String::from("hi"),
+            title: Some("a".repeat(500)),
+            ..Default::default()
+        };
+        let payload = client
+            .post_json()
+            .json(&data)
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let res = client.get(&format!("/dl{}", payload.path)).send().await?;
+        let disposition = res
+            .headers()
+            .get("content-disposition")
+            .unwrap()
+            .to_str()?
+            .to_owned();
+
+        assert!(
+            disposition.contains(&format!("filename=\"{}\"", "a".repeat(80))),
+            "got: {disposition}"
+        );
+        assert!(!disposition.contains(&"a".repeat(81)), "got: {disposition}");
+
+        Ok(())
+    }
+
+    /// A title is shown back to whoever opens the paste and handed to the browser as a filename,
+    /// so the characters that reorder or hide what follows them do not belong in it.
+    #[tokio::test]
+    async fn unsafe_characters_are_dropped_from_a_title() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        // Bidi override, zero-width space, a control character, an interlinear annotation, a
+        // paragraph separator, a private-use code point and a noncharacter.
+        let title = "a\u{202E}b\u{200B}c\u{0007}d\u{FFF9}e\u{2029}f\u{E000}g\u{FDD0}h";
+
+        for (route, path) in [("json", "/dl"), ("form", "/dl")] {
+            let payload = if route == "json" {
+                client
+                    .post_json()
+                    .json(&crate::handlers::insert::api::Entry {
+                        text: String::from("hi"),
+                        title: Some(title.to_owned()),
+                        ..Default::default()
+                    })
+                    .send()
+                    .await?
+                    .json::<crate::handlers::insert::api::RedirectResponse>()
+                    .await?
+                    .path
+            } else {
+                let res = client
+                    .post_form()
+                    .form(&crate::handlers::insert::form::Entry {
+                        text: String::from("hi"),
+                        title: title.to_owned(),
+                        ..Default::default()
+                    })
+                    .send()
+                    .await?;
+                res.headers().get("location").unwrap().to_str()?.to_owned()
+            };
+
+            let res = client.get(&format!("{path}{payload}")).send().await?;
+            let disposition = res
+                .headers()
+                .get("content-disposition")
+                .unwrap()
+                .to_str()?
+                .to_owned();
+
+            assert!(
+                disposition.contains("filename=\"abcdefgh\""),
+                "{route}: got {disposition}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The filter is about what hides or reorders text, not about what alphabet it is in — an
+    /// ordinary title in any script has to survive it intact.
+    #[tokio::test]
+    async fn an_international_title_survives() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let title = "café 日本語 Ελληνικά 🎉";
+
+        let res = client
+            .post_form()
+            .form(&crate::handlers::insert::form::Entry {
+                text: String::from("hi"),
+                title: title.to_owned(),
+                ..Default::default()
+            })
+            .send()
+            .await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        let body = client.get(&location).send().await?.text().await?;
+        assert!(body.contains(title), "title was mangled");
 
         Ok(())
     }
