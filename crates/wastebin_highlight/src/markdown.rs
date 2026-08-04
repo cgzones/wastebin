@@ -7,7 +7,7 @@ use pulldown_cmark::{
     BlockQuoteKind, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd, html,
 };
 
-use crate::highlight::{Error, MAX_RENDERED_BYTES};
+use crate::highlight::{Error, MAX_RENDERED_BYTES, replace_control_characters};
 use crate::{Highlighter, Html};
 use nesting::nesting_depth;
 
@@ -47,7 +47,8 @@ const MAX_NESTING_DEPTH: usize = 256;
 ///
 /// Markup nested deeper than [`MAX_NESTING_DEPTH`] is rejected instead of sanitized.
 pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
-    let parser = Parser::new_ext(text, OPTIONS);
+    let text = replace_control_characters(text);
+    let parser = Parser::new_ext(&text, OPTIONS);
     let events = rewrite_events(parser, highlighter)?;
 
     let mut raw = String::with_capacity(text.len());
@@ -124,6 +125,27 @@ mod tests {
         highlighter: &Highlighter,
     ) -> Result<std::sync::Arc<String>, Error> {
         render(text, highlighter).map(Html::into_inner)
+    }
+
+    /// The sanitizer drops U+0000 but passes every other C0 control through, so an escape or a
+    /// bell in a paste reached the page verbatim — invalid in an HTML document, and the one output
+    /// of this crate that is never re-escaped afterwards.
+    #[test]
+    fn control_characters_do_not_reach_the_markup() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        let html = render_string("a\u{0}b\u{7}c\u{1b}d\n\n```\nx\u{7}y\n```\n", &highlighter)?;
+
+        for control in ['\u{0}', '\u{7}', '\u{1b}'] {
+            assert!(!html.contains(control), "{control:?} survived: {html:?}");
+        }
+        assert!(html.contains("a\u{fffd}b\u{fffd}c\u{fffd}d"), "got: {html}");
+        assert!(html.contains("x\u{fffd}y"), "code block: {html}");
+
+        // Tab is left alone — inside a fence it is content, not indentation.
+        let html = render_string("```\na\tb\n```\n", &highlighter)?;
+        assert!(html.contains("a\tb"), "got: {html}");
+
+        Ok(())
     }
 
     #[test]
