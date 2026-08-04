@@ -9,8 +9,12 @@ use super::common_delete;
 pub async fn delete(
     Path(id): Path<String>,
     State(appstate): State<AppState>,
-    Uids(uids): Uids,
+    uids: Option<Uids>,
 ) -> Result<(), JsonErrorResponse> {
+    let Some(Uids(uids)) = uids else {
+        return Err(Error::MissingUid.into());
+    };
+
     let id = id.parse().map_err(Error::Id)?;
     common_delete(&appstate, id, &uids).await?;
     Ok(())
@@ -124,6 +128,24 @@ mod tests {
 
         // The paste must survive: a rate-limited request must not have deleted it anyway.
         let res = client.get(&format!("/{second_id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delete_without_uid_cookie_is_forbidden() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.post_form().form(&Entry::default()).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?;
+        let id = location.replace('/', "");
+
+        let res = client.delete(&format!("/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        // The paste must survive the rejected deletion.
+        let res = client.get(&format!("/{id}")).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         Ok(())
