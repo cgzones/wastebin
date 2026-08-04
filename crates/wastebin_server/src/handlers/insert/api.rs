@@ -438,7 +438,7 @@ mod tests {
             .send()
             .await?;
 
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
         assert!(!res.text().await?.contains("FooBarBaz"));
 
         // Omitting it entirely is a different outcome: the password prompt, not the content.

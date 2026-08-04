@@ -21,7 +21,7 @@ use axum::routing::{Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
     ALLOW, CACHE_CONTROL, CONTENT_SECURITY_POLICY, CONTENT_TYPE, REFERRER_POLICY, SERVER, VARY,
-    X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
+    WWW_AUTHENTICATE, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
 use tokio::net::{TcpListener, UnixListener};
@@ -196,6 +196,18 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         response
             .headers_mut()
             .append(VARY, HeaderValue::from_static("accept-language, cookie"));
+    }
+
+    // A 401 must name a challenge, and the only credential here is the paste password — carried
+    // either by the prompt's form or by the `wastebin-password` header. The scheme is named after
+    // it rather than reusing `Basic`, whose dialog browsers would raise over the prompt.
+    if response.status() == StatusCode::UNAUTHORIZED {
+        response
+            .headers_mut()
+            .entry(WWW_AUTHENTICATE)
+            .or_insert(HeaderValue::from_static(
+                "wastebin-password realm=\"paste\"",
+            ));
     }
 
     (headers, response)
@@ -820,6 +832,51 @@ mod tests {
                     .contains("OPTIONS"),
                 "path {path} does not name the method it just served"
             );
+        }
+
+        Ok(())
+    }
+
+    /// A 401 is required to name a challenge, and the layer answers for every one of them rather
+    /// than each handler remembering to. Both credential failures have to carry it.
+    #[tokio::test]
+    async fn every_401_carries_a_challenge() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let paste = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "FooBarBaz".to_string(),
+                password: Some("hunter2".to_string()),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+        let raw = format!("/raw{}", paste.path);
+
+        for password in [None, Some("wrong")] {
+            let mut request = client
+                .get(&raw)
+                .header(http::header::ACCEPT, "application/json");
+
+            if let Some(password) = password {
+                request = request.header("wastebin-password", password);
+            }
+
+            let res = request.send().await?;
+            assert_eq!(
+                res.status(),
+                http::StatusCode::UNAUTHORIZED,
+                "password {password:?}"
+            );
+            assert_eq!(
+                res.headers().get(http::header::WWW_AUTHENTICATE).unwrap(),
+                "wastebin-password realm=\"paste\"",
+                "password {password:?}"
+            );
+            assert!(!res.text().await?.contains("FooBarBaz"));
         }
 
         Ok(())

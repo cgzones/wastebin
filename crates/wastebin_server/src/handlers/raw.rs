@@ -93,7 +93,7 @@ mod tests {
             .header("wastebin-password", "wrong")
             .send()
             .await?;
-        assert_eq!(first.status(), StatusCode::FORBIDDEN);
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
 
         let second = client
             .get(&raw)
@@ -202,7 +202,11 @@ mod tests {
             .send()
             .await?;
 
-        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            res.headers().get(header::WWW_AUTHENTICATE).unwrap(),
+            "wastebin-password realm=\"paste\"",
+        );
 
         let body = res.text().await?;
         assert!(!body.contains("type=\"password\""), "body: {body}");

@@ -122,12 +122,17 @@ impl From<&Error> for StatusCode {
     fn from(err: &Error) -> Self {
         match err {
             Error::Database(db::Error::NotFound) | Error::RouteNotFound => StatusCode::NOT_FOUND,
-            Error::Database(db::Error::Delete | db::Error::WrongPassword)
-            | Error::MissingUid
-            | Error::CrossSite => StatusCode::FORBIDDEN,
+            Error::Database(db::Error::Delete) | Error::MissingUid | Error::CrossSite => {
+                StatusCode::FORBIDDEN
+            }
+            // Missing and wrong credentials, not a malformed request and not a permission the
+            // caller can never hold: supplying the password is exactly what makes these succeed.
+            // `security_headers_layer` gives every 401 the challenge it is required to carry.
+            Error::Database(db::Error::NoPassword | db::Error::WrongPassword) => {
+                StatusCode::UNAUTHORIZED
+            }
             Error::RateLimit => StatusCode::TOO_MANY_REQUESTS,
-            Error::Database(db::Error::NoPassword)
-            | Error::Id(_)
+            Error::Id(_)
             | Error::UrlParsing(_)
             | Error::InvalidExtension
             | Error::EmptyPaste
