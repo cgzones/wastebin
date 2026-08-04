@@ -23,6 +23,7 @@ sha2 = "0.11"
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "signal"] }
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 tower = { version = "0.5", default-features = false }
 tower-http = { version = "0.7", features = ["compression-full", "limit", "timeout", "trace"] }
 tracing = { workspace = true }

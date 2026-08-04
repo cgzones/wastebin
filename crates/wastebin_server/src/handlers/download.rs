@@ -141,6 +141,7 @@ fn get_download(key: &Key, data: Data) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::make_content_disposition;
     use crate::handlers::insert::form::Entry;
     use crate::test_helpers::{Client, StoreCookies};
     use http::header;
@@ -208,7 +209,11 @@ mod tests {
 
     /// Percent-encoding is transport, not sanitisation: the client decodes `filename*` back before
     /// showing the name, so a right-to-left override used to survive into it and offer
-    /// `evil<U+202E>gnp.exe` as `evil.exe.png`. The quoted fallback always lost it.
+    /// `evil<U+202E>gnp.exe` as `evil.exe.png`.
+    ///
+    /// Inserting now drops such a character outright, so it never reaches a stored title. The
+    /// replacement in `make_content_disposition` stays as the backstop for rows stored before
+    /// that, which is what `a_stored_reordering_title_is_still_neutralised` covers.
     #[tokio::test]
     async fn download_title_reordering_the_extension() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
@@ -226,10 +231,22 @@ mod tests {
         let content_disposition = res.headers().get(header::CONTENT_DISPOSITION).unwrap();
         assert_eq!(
             content_disposition.to_str()?,
-            "attachment; filename=\"evil_gnp.exe\"; filename*=UTF-8''evil_gnp.exe",
+            "attachment; filename=\"evilgnp.exe\"; filename*=UTF-8''evilgnp.exe",
         );
 
         Ok(())
+    }
+
+    /// A title stored before inserting sanitized them still reaches this code, so the replacement
+    /// here has to keep standing on its own.
+    #[test]
+    fn a_stored_reordering_title_is_still_neutralised() {
+        let disposition = make_content_disposition("evil\u{202e}gnp.exe");
+
+        assert_eq!(
+            disposition.to_str().unwrap(),
+            "attachment; filename=\"evil_gnp.exe\"; filename*=UTF-8''evil_gnp.exe",
+        );
     }
 
     #[tokio::test]
