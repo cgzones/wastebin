@@ -129,6 +129,10 @@ enum Command {
         id: Id,
         result: oneshot::Sender<Result<(), Error>>,
     },
+    Take {
+        id: Id,
+        result: oneshot::Sender<Result<bool, Error>>,
+    },
     DeleteMany {
         ids: Vec<Id>,
         result: oneshot::Sender<Result<usize, Error>>,
@@ -451,6 +455,7 @@ impl Handler {
                 Command::Get { id, result } => reply(result, self.get(id)),
                 Command::GetMetadata { id, result } => reply(result, self.get_metadata(id)),
                 Command::Delete { id, result } => reply(result, self.delete(id)),
+                Command::Take { id, result } => reply(result, self.take(id)),
                 Command::DeleteMany { ids, result } => reply(result, self.delete_many(ids)),
                 Command::DeleteFor { id, uids, result } => {
                     reply(result, self.delete_for(id, &uids));
@@ -562,6 +567,18 @@ impl Handler {
             .execute("DELETE FROM entries WHERE id=?1", params![id.to_i64()])?;
 
         Ok(())
+    }
+
+    /// Delete `id`, reporting whether this call is the one that removed the row.
+    ///
+    /// Commands run one at a time, so for concurrent readers of the same burn-after-reading
+    /// entry exactly one `DELETE` reports an affected row.
+    fn take(&self, id: Id) -> Result<bool, Error> {
+        let affected = self
+            .conn
+            .execute("DELETE FROM entries WHERE id=?1", params![id.to_i64()])?;
+
+        Ok(affected > 0)
     }
 
     fn delete_many(&mut self, ids: Vec<Id>) -> Result<usize, Error> {
@@ -692,7 +709,13 @@ impl Database {
             .await?;
 
         if data.metadata.must_be_deleted {
-            self.delete(id).await?;
+            // The delete is what settles the race: readers that arrive together all decrypt
+            // successfully, but only the one that actually removed the row may see the content.
+            // Deleting after decryption keeps a wrong password from burning the entry.
+            if !self.take(id).await? {
+                return Err(Error::NotFound);
+            }
+
             return Ok(read::Entry::Burned(data));
         }
 
@@ -719,6 +742,11 @@ impl Database {
     /// Delete paste with `id`.
     async fn delete(&self, id: Id) -> Result<(), Error> {
         self.call(|result| Command::Delete { id, result }).await
+    }
+
+    /// Delete paste with `id`, reporting whether this call removed it.
+    async fn take(&self, id: Id) -> Result<bool, Error> {
+        self.call(|result| Command::Take { id, result }).await
     }
 
     /// Delete pastes with `ids`.
@@ -794,6 +822,44 @@ mod tests {
 
         let result = db.get(Id::from(5678u32), None).await;
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_burn_an_entry_exactly_once() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for _ in 0..32 {
+            let db = new_db()?;
+
+            let (id, _entry) = db
+                .insert(write::Entry {
+                    text: "burn me".to_string(),
+                    burn_after_reading: Some(true),
+                    ..Default::default()
+                })
+                .await?;
+
+            let readers = (0..16)
+                .map(|_| {
+                    let db = db.clone();
+                    tokio::spawn(async move { db.get(id, None).await })
+                })
+                .collect::<Vec<_>>();
+
+            let mut served = 0;
+            for reader in readers {
+                if let Ok(read::Entry::Burned(data)) = reader.await? {
+                    assert_eq!(data.text, "burn me");
+                    served += 1;
+                }
+            }
+
+            assert_eq!(
+                served, 1,
+                "burn entry served to {served} concurrent readers"
+            );
+        }
 
         Ok(())
     }
