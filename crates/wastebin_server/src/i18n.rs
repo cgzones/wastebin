@@ -145,6 +145,7 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "error.malformed_form" => "The submitted form could not be processed.",
     "error.payload_too_large" => "The paste is larger than this server accepts.",
     "error.unsupported_media_type" => "That content type is not supported here.",
+    "error.method_not_allowed" => "That method is not allowed on this address.",
     "error.too_deeply_nested" => "This paste is nested too deeply to render.",
     "error.internal" => "Something went wrong on the server.",
 
@@ -235,6 +236,7 @@ static DE: phf::Map<&'static str, &'static str> = phf_map! {
     "error.malformed_form" => "Das abgeschickte Formular konnte nicht verarbeitet werden.",
     "error.payload_too_large" => "Der Paste ist größer als dieser Server annimmt.",
     "error.unsupported_media_type" => "Dieser Inhaltstyp wird hier nicht unterstützt.",
+    "error.method_not_allowed" => "Diese Methode ist unter dieser Adresse nicht erlaubt.",
     "error.too_deeply_nested" => "Dieser Paste ist zu tief verschachtelt, um dargestellt zu werden.",
     "error.internal" => "Auf dem Server ist etwas schiefgelaufen.",
 
@@ -325,6 +327,7 @@ static ZH: phf::Map<&'static str, &'static str> = phf_map! {
     "error.malformed_form" => "无法处理提交的表单。",
     "error.payload_too_large" => "该剪贴超出本服务器接受的大小。",
     "error.unsupported_media_type" => "此处不支持该内容类型。",
+    "error.method_not_allowed" => "该地址不允许使用此方法。",
     "error.too_deeply_nested" => "该剪贴嵌套层级过深，无法渲染。",
     "error.internal" => "服务器发生了错误。",
 

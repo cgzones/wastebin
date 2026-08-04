@@ -208,14 +208,22 @@ async fn handle_service_errors(
     req: Request,
     next: Next,
 ) -> Response {
+    // `answer_options` answers OPTIONS out of the same 405, so rendering a page here would only
+    // build one for it to throw away. The status is what it matches on, and that survives either
+    // way — this just skips the wasted render.
+    let asked_options = req.method() == http::Method::OPTIONS;
     let response = next.run(req).await;
 
     let error = match response.status() {
         StatusCode::PAYLOAD_TOO_LARGE => Error::PayloadTooLarge,
         StatusCode::UNSUPPORTED_MEDIA_TYPE => Error::UnsupportedMediaType,
+        StatusCode::METHOD_NOT_ALLOWED if !asked_options => Error::MethodNotAllowed,
         _ => return response,
     };
 
+    // The `Allow` a 405 is required to carry is not on `response` yet: axum attaches it as the
+    // inner router completes, after this layer has already run, so the rendered page inherits it
+    // without anything being carried over by hand.
     html::make_error(error, page, theme, lang, accepts).into_response()
 }
 
@@ -592,6 +600,43 @@ mod tests {
         let body = res.text().await?;
         assert!(body.contains("<!DOCTYPE html>"), "body: {body}");
         assert!(body.contains("does not exist"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// A wrong method used to answer with an empty body and no content type, so bookmarking a
+    /// form action showed a blank page. It still has to name what it would have allowed.
+    #[tokio::test]
+    async fn wrong_method_renders_the_error_page() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.get("/new").send().await?;
+        assert_eq!(res.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(res.headers().get(http::header::ALLOW).unwrap(), "POST");
+        assert_eq!(
+            res.headers().get(http::header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+
+        let body = res.text().await?;
+        assert!(body.contains("<!DOCTYPE html>"), "body: {body}");
+        assert!(body.contains("not allowed"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// `answer_options` builds its 204 out of the very 405 the page above now replaces, and the
+    /// `Allow` it needs is attached only after that replacement happens. Both still have to hold.
+    #[tokio::test]
+    async fn options_still_answers_with_no_content() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.request(http::Method::OPTIONS, "/new").send().await?;
+        assert_eq!(res.status(), http::StatusCode::NO_CONTENT);
+        assert_eq!(
+            res.headers().get(http::header::ALLOW).unwrap(),
+            "POST,OPTIONS"
+        );
 
         Ok(())
     }
