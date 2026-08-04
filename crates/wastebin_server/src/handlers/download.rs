@@ -40,9 +40,26 @@ pub async fn get(
     .map_err(|err| make_error(err, page, theme, lang))
 }
 
+/// Build the `Content-Disposition` for `filename`.
+///
+/// RFC 6266 wants both spellings: a quoted `filename` that any parser understands, and the
+/// extended `filename*` after it, which the parsers that support it prefer. Emitting only the
+/// latter left clients that ignore it falling back to the last path segment of the URL.
 #[must_use]
 fn make_content_disposition(filename: &str) -> HeaderValue {
-    let mut value = String::from("attachment; filename*=UTF-8''");
+    let mut value = String::from("attachment; filename=\"");
+
+    for c in filename.chars() {
+        // A quote or backslash would end the quoted string early and let the rest of the title be
+        // read as further parameters; anything outside printable ASCII cannot be spelled here.
+        if (c.is_ascii_graphic() && c != '"' && c != '\\') || c == ' ' {
+            value.push(c);
+        } else {
+            value.push('_');
+        }
+    }
+
+    value.push_str("\"; filename*=UTF-8''");
 
     for b in filename.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'~' | b'+') {
@@ -97,7 +114,7 @@ mod tests {
         let content_disposition = res.headers().get(header::CONTENT_DISPOSITION).unwrap();
         assert_eq!(
             content_disposition.to_str()?,
-            format!("attachment; filename*=UTF-8''{filename}.cpp"),
+            format!("attachment; filename=\"{filename}.cpp\"; filename*=UTF-8''{filename}.cpp"),
         );
 
         let content = res.text().await?;
@@ -107,7 +124,7 @@ mod tests {
         let content_disposition = res.headers().get(header::CONTENT_DISPOSITION).unwrap();
         assert_eq!(
             content_disposition.to_str()?,
-            format!("attachment; filename*=UTF-8''{filename}"),
+            format!("attachment; filename=\"{filename}\"; filename*=UTF-8''{filename}"),
         );
 
         Ok(())
@@ -128,9 +145,11 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let content_disposition = res.headers().get(header::CONTENT_DISPOSITION).unwrap();
+        // The quote must not survive into the fallback, or it would close the quoted string and
+        // let the rest of the title be read as further parameters.
         assert_eq!(
             content_disposition.to_str()?,
-            "attachment; filename*=UTF-8''file%22name.txt",
+            "attachment; filename=\"file_name.txt\"; filename*=UTF-8''file%22name.txt",
         );
 
         Ok(())
@@ -153,7 +172,7 @@ mod tests {
         let content_disposition = res.headers().get(header::CONTENT_DISPOSITION).unwrap();
         assert_eq!(
             content_disposition.to_str()?,
-            "attachment; filename*=UTF-8''caf%C3%A9.txt",
+            "attachment; filename=\"caf_.txt\"; filename*=UTF-8''caf%C3%A9.txt",
         );
 
         Ok(())
