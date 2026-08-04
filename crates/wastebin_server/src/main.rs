@@ -121,17 +121,17 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         "default-src 'none'; script-src 'self'; img-src 'self' https: data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ; require-trusted-types-for 'script' ; trusted-types 'none' ;",
     );
 
-    let csp = if req.uri().path().starts_with("/md/") {
-        CSP_RENDERED
-    } else {
-        CSP_STRICT
-    };
-
     // Every feature wastebin never uses. `clipboard-write` is deliberately absent: the copy
     // buttons need it and its default allowlist is already `self`.
     const PERMISSIONS_POLICY: HeaderValue = HeaderValue::from_static(
         "accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), hid=(), idle-detection=(), local-fonts=(), magnetometer=(), microphone=(), midi=(), payment=(), picture-in-picture=(), publickey-credentials-get=(), screen-wake-lock=(), serial=(), usb=(), xr-spatial-tracking=()",
     );
+
+    let csp = if req.uri().path().starts_with("/md/") {
+        CSP_RENDERED
+    } else {
+        CSP_STRICT
+    };
 
     let headers: [(HeaderName, HeaderValue); 10] = [
         (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
@@ -410,8 +410,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn permissions_policy_disables_unused_features()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn permissions_policy_disables_unused_features() -> Result<(), Box<dyn std::error::Error>>
+    {
         let client = Client::new(StoreCookies(false)).await;
         let res = client.get("/").send().await?;
 
@@ -451,7 +451,10 @@ mod tests {
                 csp.contains("require-trusted-types-for 'script'"),
                 "path {path}, csp: {csp}"
             );
-            assert!(csp.contains("trusted-types 'none'"), "path {path}, csp: {csp}");
+            assert!(
+                csp.contains("trusted-types 'none'"),
+                "path {path}, csp: {csp}"
+            );
         }
 
         Ok(())
