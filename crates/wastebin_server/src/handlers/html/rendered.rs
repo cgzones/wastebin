@@ -178,7 +178,10 @@ mod tests {
             .unwrap()
             .to_str()?
             .to_owned();
-        assert!(csp.contains("img-src * data:"), "csp: {csp}");
+        // Remote images stay possible, but only over TLS: a plaintext image URL would leak the
+        // fact and timing of the view to a network observer.
+        assert!(csp.contains("img-src 'self' https: data:"), "csp: {csp}");
+        assert!(!csp.contains("img-src *"), "csp: {csp}");
 
         let source = client.get(&location).send().await?;
         let csp = source

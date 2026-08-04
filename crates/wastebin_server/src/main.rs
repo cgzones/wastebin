@@ -112,12 +112,13 @@ impl<B> MakeSpan<B> for PathOnlyMakeSpan {
 }
 
 async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
-    // Rendered Markdown may embed remote images via `![](…)`; relax img-src for that route only.
+    // Rendered Markdown may embed remote images via `![](…)`; relax img-src for that route only,
+    // and only to TLS origins so a paste cannot force a plaintext request.
     const CSP_STRICT: HeaderValue = HeaderValue::from_static(
         "default-src 'none'; script-src 'self'; img-src 'self' data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
     );
     const CSP_RENDERED: HeaderValue = HeaderValue::from_static(
-        "default-src 'none'; script-src 'self'; img-src * data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
+        "default-src 'none'; script-src 'self'; img-src 'self' https: data: ; style-src 'self' data: ; font-src 'self' data: ; object-src 'none' ; base-uri 'none' ; frame-ancestors 'none' ; form-action 'self' ;",
     );
 
     let csp = if req.uri().path().starts_with("/md/") {
