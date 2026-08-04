@@ -19,8 +19,8 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{Router, get, post};
 use axum_extra::extract::cookie::Key;
 use http::header::{
-    CONTENT_SECURITY_POLICY, REFERRER_POLICY, SERVER, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS,
-    X_XSS_PROTECTION,
+    CACHE_CONTROL, CONTENT_SECURITY_POLICY, REFERRER_POLICY, SERVER, X_CONTENT_TYPE_OPTIONS,
+    X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
 use tokio::net::{TcpListener, UnixListener};
@@ -130,7 +130,17 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
         (X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block")),
     ];
 
-    (headers, next.run(req).await)
+    let mut response = next.run(req).await;
+
+    // A paste URL is the only thing guarding its content, and the rendered page varies with the
+    // caller's cookies, so nothing dynamic may be retained by a shared cache. Assets are served
+    // from content-hashed routes and set their own long-lived policy, which is left alone.
+    response
+        .headers_mut()
+        .entry(CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+
+    (headers, response)
 }
 
 async fn handle_service_errors(

@@ -198,6 +198,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn paste_responses_are_not_cacheable() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let data = Entry {
+            text: String::from("FooBarBaz"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        for path in [
+            location.clone(),
+            format!("/raw{location}"),
+            format!("/dl{location}"),
+            format!("/qr{location}"),
+        ] {
+            let res = client.get(&path).send().await?;
+            assert_eq!(
+                res.headers().get("cache-control").unwrap(),
+                "no-store",
+                "path {path}"
+            );
+        }
+
+        // Content-hashed assets keep their own long-lived policy. Take the route from the page
+        // itself so this does not depend on the current content hash.
+        let index = client.get("/").send().await?.text().await?;
+        let (_, rest) = index
+            .split_once("<link rel=\"stylesheet\" href=\"")
+            .unwrap();
+        let (asset_route, _) = rest.split_once('"').unwrap();
+
+        let res = client.get(asset_route).send().await?;
+        assert_eq!(res.status(), StatusCode::OK, "asset {asset_route}");
+        assert_ne!(res.headers().get("cache-control").unwrap(), "no-store");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn owner_handoff_does_not_redirect_off_site() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
