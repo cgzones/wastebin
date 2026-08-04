@@ -27,7 +27,7 @@ use tokio::net::{TcpListener, UnixListener};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{MakeSpan, TraceLayer};
 
 use crate::cache::Cache;
 use crate::errors::Error;
@@ -81,6 +81,24 @@ impl FromRef<AppState> for Database {
 impl FromRef<AppState> for Cache {
     fn from_ref(state: &AppState) -> Self {
         state.cache.clone()
+    }
+}
+
+/// Request span that records the path but not the query string.
+///
+/// A paste URL carries its `?owner=` deletion token in the query, and the id itself is the only
+/// thing guarding the content, so neither belongs in a log line that outlives the request.
+#[derive(Clone, Copy)]
+struct PathOnlyMakeSpan;
+
+impl<B> MakeSpan<B> for PathOnlyMakeSpan {
+    fn make_span(&mut self, request: &http::Request<B>) -> tracing::Span {
+        tracing::debug_span!(
+            "request",
+            method = %request.method(),
+            path = %request.uri().path(),
+            version = ?request.version(),
+        )
     }
 }
 
@@ -207,7 +225,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .layer(
             ServiceBuilder::new()
                 .layer(DefaultBodyLimit::max(max_body_size))
-                .layer(TraceLayer::new_for_http())
+                .layer(TraceLayer::new_for_http().make_span_with(PathOnlyMakeSpan))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     timeout,
