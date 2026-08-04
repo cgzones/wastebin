@@ -50,8 +50,13 @@ impl Asset {
     #[must_use]
     pub fn new_hashed(name: &str, kind: Kind, content: Vec<u8>) -> Self {
         let (mime, ext) = match kind {
-            Kind::Css => (mime::TEXT_CSS, "css"),
-            Kind::Js => (mime::TEXT_JAVASCRIPT, "js"),
+            Kind::Css => (mime::TEXT_CSS_UTF_8, "css"),
+            Kind::Js => (
+                "text/javascript; charset=utf-8"
+                    .parse()
+                    .expect("valid MIME type"),
+                "js",
+            ),
         };
 
         let route = format!(
@@ -157,6 +162,24 @@ mod tests {
         let headers = response.headers();
 
         assert_eq!(headers.get(http::header::CONTENT_TYPE).unwrap(), "text/css");
+    }
+
+    /// `nosniff` stops a browser from second-guessing the declared type, so the charset has to
+    /// be declared rather than inferred from the embedding document.
+    #[test]
+    fn text_assets_declare_their_charset() {
+        for (kind, expected) in [
+            (Kind::Css, "text/css; charset=utf-8"),
+            (Kind::Js, "text/javascript; charset=utf-8"),
+        ] {
+            let asset = Asset::new_hashed("a", kind, String::from("/* ä */").into_bytes());
+            let response = asset.into_response();
+
+            assert_eq!(
+                response.headers().get(http::header::CONTENT_TYPE).unwrap(),
+                expected
+            );
+        }
     }
 
     /// A content-hashed route can never serve different bytes, so it may be pinned forever.
