@@ -583,30 +583,6 @@ header {
   opacity: 0.75;
 }
 
-.upload-btn {
-  margin-top: 8px;
-  width: 100%;
-  appearance: none;
-  border: 1px solid var(--border-soft);
-  background: transparent;
-  color: var(--fg-dim);
-  padding: 7px 10px;
-  border-radius: 3px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  transition: color 120ms, border-color 120ms;
-}
-
-.upload-btn:hover {
-  color: var(--fg);
-  border-color: var(--border);
-}
-
 .nav-group .theme-switcher {
   margin-left: 6px;
 }
@@ -874,13 +850,6 @@ table {
   background: var(--panel-bg2);
 }
 
-.centered-body {
-  font-family: var(--font-mono);
-  font-size: var(--fs-md);
-  text-align: center;
-  line-height: 1.6;
-}
-
 .flex-center .button {
   width: 100%;
   padding: 12px 16px;
@@ -1000,25 +969,21 @@ table {
   display: block;
 }
 
-.panel::-webkit-scrollbar,
-.thin-scroll::-webkit-scrollbar {
+.panel::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
-.panel::-webkit-scrollbar-thumb,
-.thin-scroll::-webkit-scrollbar-thumb {
+.panel::-webkit-scrollbar-thumb {
   background: rgba(128, 128, 128, 0.25);
   border-radius: 10px;
 }
 
-.panel::-webkit-scrollbar-thumb:hover,
-.thin-scroll::-webkit-scrollbar-thumb:hover {
+.panel::-webkit-scrollbar-thumb:hover {
   background: rgba(128, 128, 128, 0.4);
 }
 
-.panel::-webkit-scrollbar-track,
-.thin-scroll::-webkit-scrollbar-track {
+.panel::-webkit-scrollbar-track {
   background: transparent;
 }
 
