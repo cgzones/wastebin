@@ -39,26 +39,12 @@ impl Lang {
     /// Translations may contain markup, so the result is rendered unescaped. `arg` is
     /// caller-supplied and therefore HTML-escaped here.
     pub(crate) fn t_with(self, key: &'static str, arg: impl std::fmt::Display) -> String {
-        self.t(key).replace("{0}", &escape_html(&arg.to_string()))
+        let arg = arg.to_string();
+        let mut escaped = String::with_capacity(arg.len());
+        wastebin_highlight::escape(&arg, &mut escaped);
+
+        self.t(key).replace("{0}", &escaped)
     }
-}
-
-/// Escape the characters that let a value break out of text or an attribute.
-fn escape_html(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-
-    for c in value.chars() {
-        match c {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&#39;"),
-            _ => escaped.push(c),
-        }
-    }
-
-    escaped
 }
 
 static EN: phf::Map<&'static str, &'static str> = phf_map! {
