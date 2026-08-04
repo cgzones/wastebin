@@ -203,11 +203,7 @@ impl PasteReader<'_> {
         key: &Key,
         form: Option<PasteForm>,
         action: String,
-        render: impl FnOnce(
-            String,
-            Option<String>,
-            Highlighter,
-        ) -> Result<Html, wastebin_highlight::Error>
+        render: impl FnOnce(String, Highlighter) -> Result<Html, wastebin_highlight::Error>
         + Send
         + 'static,
     ) -> Result<Read, crate::Error> {
@@ -270,11 +266,10 @@ impl PasteReader<'_> {
         };
 
         let Data { text, metadata } = data;
-        let ext = key.ext.clone();
         let highlighter = self.highlighter.clone();
         let html: Arc<String> = self
             .renderer
-            .run(move || render(text, ext, highlighter))
+            .run(move || render(text, highlighter))
             .await??
             .into_inner();
 

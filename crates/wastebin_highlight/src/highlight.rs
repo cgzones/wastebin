@@ -112,6 +112,30 @@ pub struct Highlighter {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct SyntaxKey(usize);
 
+/// Everything an extension decides, worked out once by [`Highlighter::resolve`].
+///
+/// The two answers come from the same resolution, so a caller cannot end up rendering with one
+/// syntax while keying its cache slot — or its Markdown toggle — off another.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Resolved {
+    key: SyntaxKey,
+    is_markdown: bool,
+}
+
+impl Resolved {
+    /// Which syntax the extension named.
+    #[must_use]
+    pub fn key(self) -> SyntaxKey {
+        self.key
+    }
+
+    /// Whether that syntax is Markdown, i.e. whether the paste also has a rendered view.
+    #[must_use]
+    pub fn is_markdown(self) -> bool {
+        self.is_markdown
+    }
+}
+
 /// Syntax reference.
 pub struct Syntax<'a> {
     /// Name of the syntax or the language it is related to.
@@ -436,6 +460,23 @@ impl Highlighter {
             .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text())
     }
 
+    /// Work out everything an extension decides, in one pass over the syntax set.
+    ///
+    /// Resolving is not cheap: `find_syntax_by_extension` scans every syntax and every extension
+    /// each of them lists, and the index behind [`SyntaxKey`] scans them again — together around
+    /// 250 ns. A source view asked four separate times for the same answer: once for the cache
+    /// slot on the way in, once inside the render, once for the slot on the way out, and once for
+    /// the Markdown toggle. Asking once and carrying the result is the whole point of this type.
+    #[must_use]
+    pub fn resolve(&self, ext: Option<&str>) -> Resolved {
+        let syntax = self.syntax_for(ext);
+
+        Resolved {
+            key: SyntaxKey(index_of(&self.syntax_set, syntax).unwrap_or(self.plain_text)),
+            is_markdown: is_markdown_syntax(syntax),
+        }
+    }
+
     /// Return which syntax `ext` resolves to.
     ///
     /// Two extensions with the same key render the same document, which is what lets a caller hold
@@ -443,9 +484,7 @@ impl Highlighter {
     /// text, so they share a key too.
     #[must_use]
     pub fn syntax_key(&self, ext: Option<&str>) -> SyntaxKey {
-        let syntax = self.syntax_for(ext);
-
-        SyntaxKey(index_of(&self.syntax_set, syntax).unwrap_or(self.plain_text))
+        self.resolve(ext).key
     }
 
     /// Return `true` if `ext` names any extension the syntax set lists.
@@ -461,20 +500,31 @@ impl Highlighter {
     /// as rendered HTML.
     #[must_use]
     pub fn is_markdown(&self, ext: Option<&str>) -> bool {
-        is_markdown_syntax(self.syntax_for(ext))
+        self.resolve(ext).is_markdown
     }
 
     /// Highlight `text` with the given file extension which is used to
     /// determine the right syntax. If not given or does not exist, plain text will be generated.
     pub fn highlight(&self, text: String, ext: Option<String>) -> Result<Html, Error> {
+        self.highlight_resolved(text, self.resolve(ext.as_deref()))
+    }
+
+    /// Highlight `text` with a syntax [`Highlighter::resolve`] already worked out.
+    pub fn highlight_resolved(&self, text: String, resolved: Resolved) -> Result<Html, Error> {
         // Before anything looks at it: most lines are emitted by syntect's own tokeniser, which
         // never reaches the escaper below, so this is the only point every path shares.
         let text = match replace_control_characters(&text) {
             Cow::Owned(cleaned) => cleaned,
             Cow::Borrowed(_) => text,
         };
-        let syntax_ref = self.syntax_for(ext.as_deref());
-        let is_markdown = is_markdown_syntax(syntax_ref);
+        let Resolved { key, is_markdown } = resolved;
+        // The key is an index into the very slice `syntax_for` picked from, so this is the same
+        // reference it returned; the fallback keeps the lookup total without restating the rules.
+        let syntax_ref = self
+            .syntax_set
+            .syntaxes()
+            .get(key.0)
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
         let mut parse_state = ParseState::new(syntax_ref);
         let mut scope_stack = ScopeStack::new();
 
@@ -853,6 +903,39 @@ mod tests {
 
         assert!(!html.contains("<script>"), "raw markup leaked: {html}");
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+
+        Ok(())
+    }
+
+    /// A request resolves the extension once and renders from what that produced, so the key has
+    /// to name its syntax back exactly. It travels as an index into the syntax set rather than as
+    /// the reference itself, and picking that index up wrong highlights the paste as some other
+    /// language — or silently as plain text — with nothing else failing to say so.
+    ///
+    /// Asserted against each syntax's own scope classes rather than by rendering the same text
+    /// both ways: `highlight` resolves through `resolve` too, so comparing the two only ever
+    /// compares one implementation with itself and holds just as well when it is wrong.
+    #[test]
+    fn a_resolved_key_renders_with_the_syntax_it_names() -> Result<(), Box<dyn std::error::Error>> {
+        let text = "fn main() { let x = 1; }\n";
+
+        for (ext, scope) in [
+            ("rs", "source rust"),
+            ("py", "source python"),
+            ("md", "text html markdown"),
+            ("txt", "text plain"),
+            ("zzz-not-a-syntax", "text plain"),
+        ] {
+            let resolved = HIGHLIGHTER.resolve(Some(ext));
+            let html =
+                Html::into_inner(HIGHLIGHTER.highlight_resolved(text.to_string(), resolved)?);
+
+            assert!(
+                html.contains(&format!("<span class=\"{scope}\"")),
+                "{ext} did not render as {scope}: {}",
+                &html[..html.len().min(400)]
+            );
+        }
 
         Ok(())
     }

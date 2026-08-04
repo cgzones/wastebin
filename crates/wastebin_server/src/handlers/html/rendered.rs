@@ -70,7 +70,7 @@ pub async fn get(
             &key,
             form.map(|Form(form)| form),
             format!("/md/{key}"),
-            |text, _, highlighter| markdown::render(&text, &highlighter),
+            |text, highlighter| markdown::render(&text, &highlighter),
         )
         .await?;
 

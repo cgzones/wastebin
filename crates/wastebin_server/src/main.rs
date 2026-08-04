@@ -447,7 +447,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     env::validate_expirations(&expirations, max_expiration)?;
 
     let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
-    let cache = Cache::new(cache_size, cache_max_bytes, Arc::clone(&highlighter))?;
+    let cache = Cache::new(cache_size, cache_max_bytes)?;
     let (db, db_handler) = Database::new(method, core_env::password_hash_salt()?)?;
 
     tracing::debug!("serving on {socket_type}");

@@ -18,19 +18,27 @@ pub(crate) struct Key {
 }
 
 /// Which representation of a paste a cached entry holds.
+///
+/// The source view carries the syntax it was rendered with — the syntax itself, not the extension
+/// that named it, since that is all the output ever depended on. Every spelling of one syntax
+/// therefore shares a slot: `md`, `markdown` and `mdown`, and equally the several hundred
+/// extensions that name no syntax and so all render as plain text. Keeping them apart would let a
+/// single paste occupy the whole cache, the extension being caller-supplied and unbounded in
+/// variety — `/{id}.a`, `/{id}.b`, … would each be a miss, a fresh render and an eviction.
+///
+/// A rendered document does not depend on the extension at all — `markdown::render` is never told
+/// one — so that variant carries no syntax. Holding it here rather than resolving inside the cache
+/// is what lets a request resolve once and spend the answer on the render as well.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
-    /// Syntax-highlighted source view.
-    Source,
+    /// Syntax-highlighted source view, rendered with the given syntax.
+    Source(wastebin_highlight::SyntaxKey),
     /// Markdown rendered to HTML.
     Rendered,
 }
 
-/// Cache slot: a paste, the syntax its source view was rendered with, and the representation held.
-///
-/// The syntax rather than the extension that named it, since that is what the render actually
-/// depended on; [`None`] for a rendered document, which depended on neither.
-type Slot = (Id, Option<wastebin_highlight::SyntaxKey>, Mode);
+/// Cache slot: a paste and the representation held.
+type Slot = (Id, Mode);
 
 /// The LRU behind [`Cache`], absent when caching is disabled.
 type Store = Option<Arc<Mutex<LruCache<Slot, Arc<String>>>>>;
@@ -43,23 +51,16 @@ pub(crate) struct Cache {
     inner: Store,
     /// Ceiling on the bytes held across all entries.
     max_bytes: usize,
-    /// Decides which extensions name a syntax of their own; see [`Cache::slot`].
-    highlighter: Arc<wastebin_highlight::Highlighter>,
 }
 
 impl Cache {
     /// Create a cache holding up to `size` rendered documents totalling at most `max_bytes`;
     /// a `size` of [`None`] disables caching.
-    pub fn new(
-        size: Option<NonZeroUsize>,
-        max_bytes: usize,
-        highlighter: Arc<wastebin_highlight::Highlighter>,
-    ) -> Result<Self, env::Error> {
+    pub fn new(size: Option<NonZeroUsize>, max_bytes: usize) -> Result<Self, env::Error> {
         let Some(size) = size else {
             return Ok(Self {
                 inner: None,
                 max_bytes,
-                highlighter,
             });
         };
 
@@ -68,28 +69,7 @@ impl Cache {
         Ok(Self {
             inner: Some(Arc::new(Mutex::new(cache))),
             max_bytes,
-            highlighter,
         })
-    }
-
-    /// Build the slot `key` occupies.
-    ///
-    /// Keyed on the syntax the extension resolves to, not on the extension itself, because that is
-    /// all the source view's output ever depended on. Every spelling of one syntax therefore shares
-    /// a slot — `md`, `markdown` and `mdown`, and equally the several hundred extensions that name
-    /// no syntax and so all render as plain text. Keeping them apart would let a single paste
-    /// occupy the whole cache: the extension is caller-supplied and unbounded in variety, so
-    /// `/{id}.a`, `/{id}.b`, … would each be a miss, a fresh render and an eviction.
-    ///
-    /// A rendered document does not depend on the extension at all — `markdown::render` is never
-    /// told one — so it carries no syntax here.
-    fn slot(&self, key: &Key, mode: Mode) -> Slot {
-        let syntax = match mode {
-            Mode::Rendered => None,
-            Mode::Source => Some(self.highlighter.syntax_key(key.ext.as_deref())),
-        };
-
-        (key.id, syntax, mode)
     }
 
     pub fn put(&self, key: &Key, mode: Mode, value: Arc<String>) {
@@ -97,10 +77,7 @@ impl Cache {
             return;
         };
 
-        // Resolved before taking the lock: `slot` walks the syntax set, which is far more work
-        // than the lookup it feeds and would otherwise stretch a process-wide critical section
-        // every source view passes through.
-        let slot = self.slot(key, mode);
+        let slot = (key.id, mode);
 
         let mut cache = inner.lock().expect("getting lock");
         cache.cache_set(slot, value);
@@ -129,9 +106,7 @@ impl Cache {
     pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<String>> {
         let inner = self.inner.as_ref()?;
 
-        // Resolved before the lock, as in `put`: the receiver of `cache_get` — and so `.lock()` —
-        // is evaluated before its argument, which would put the syntax walk inside the section.
-        let slot = self.slot(key, mode);
+        let slot = (key.id, mode);
 
         inner
             .lock()
@@ -193,12 +168,16 @@ mod tests {
     }
 
     fn test_cache(size: Option<NonZeroUsize>, max_bytes: usize) -> Cache {
-        Cache::new(
-            size,
-            max_bytes,
-            Arc::new(wastebin_highlight::Highlighter::default()),
-        )
-        .unwrap()
+        Cache::new(size, max_bytes).unwrap()
+    }
+
+    /// Building one deserializes the whole syntax set, so the tests share a single instance.
+    static HIGHLIGHTER: std::sync::LazyLock<wastebin_highlight::Highlighter> =
+        std::sync::LazyLock::new(wastebin_highlight::Highlighter::default);
+
+    /// The source-view mode a key's extension resolves to, worked out the way a request does.
+    fn source(key: &Key) -> Mode {
+        Mode::Source(HIGHLIGHTER.syntax_key(key.ext.as_deref()))
     }
 
     #[test]
@@ -206,15 +185,15 @@ mod tests {
         let key = Key::from_str("bJZCna").unwrap();
 
         let cache = test_cache(NonZeroUsize::new(1), 1024);
-        cache.put(&key, Mode::Source, Arc::new(String::from("cached")));
+        cache.put(&key, source(&key), Arc::new(String::from("cached")));
         assert_eq!(
-            cache.get(&key, Mode::Source).as_deref().map(String::as_str),
+            cache.get(&key, source(&key)).as_deref().map(String::as_str),
             Some("cached")
         );
 
         let cache = test_cache(None, 1024);
-        cache.put(&key, Mode::Source, Arc::new(String::from("cached")));
-        assert!(cache.get(&key, Mode::Source).is_none());
+        cache.put(&key, source(&key), Arc::new(String::from("cached")));
+        assert!(cache.get(&key, source(&key)).is_none());
     }
 
     #[test]
@@ -228,7 +207,7 @@ mod tests {
                 id: Id::from(n),
                 ext: None,
             };
-            cache.put(&key, Mode::Source, Arc::clone(&value));
+            cache.put(&key, source(&key), Arc::clone(&value));
         }
 
         let held = {
@@ -242,12 +221,12 @@ mod tests {
             id: Id::from(9u32),
             ext: None,
         };
-        assert!(cache.get(&newest, Mode::Source).is_some());
+        assert!(cache.get(&newest, source(&newest)).is_some());
         let oldest = Key {
             id: Id::from(0u32),
             ext: None,
         };
-        assert!(cache.get(&oldest, Mode::Source).is_none());
+        assert!(cache.get(&oldest, source(&oldest)).is_none());
     }
 
     /// Eviction stops as soon as the total fits, so an insert that overshoots the budget by one
@@ -268,7 +247,7 @@ mod tests {
                 id: Id::from(n),
                 ext: None,
             };
-            cache.put(&key, Mode::Source, Arc::clone(&value));
+            cache.put(&key, source(&key), Arc::clone(&value));
         }
 
         let held = (1..4u32)
@@ -277,7 +256,7 @@ mod tests {
                     id: Id::from(*n),
                     ext: None,
                 };
-                cache.get(&key, Mode::Source).is_some()
+                cache.get(&key, source(&key)).is_some()
             })
             .count();
 
@@ -294,8 +273,8 @@ mod tests {
         let cache = test_cache(NonZeroUsize::new(128), 100);
         let key = Key::from_str("bJZCna").unwrap();
 
-        cache.put(&key, Mode::Source, Arc::new("x".repeat(500)));
-        assert!(cache.get(&key, Mode::Source).is_none());
+        cache.put(&key, source(&key), Arc::new("x".repeat(500)));
+        assert!(cache.get(&key, source(&key)).is_none());
     }
 
     #[test]
@@ -307,7 +286,7 @@ mod tests {
             id,
             ext: Some("zzz-not-a-syntax".to_string()),
         };
-        cache.put(&stored, Mode::Source, Arc::new(String::from("plain")));
+        cache.put(&stored, source(&stored), Arc::new(String::from("plain")));
 
         // A different unknown extension, and no extension at all, render identically and so must
         // hit the same entry rather than each taking a slot of their own.
@@ -315,7 +294,7 @@ mod tests {
             let probe = Key { id, ext };
             assert_eq!(
                 cache
-                    .get(&probe, Mode::Source)
+                    .get(&probe, source(&probe))
                     .as_deref()
                     .map(String::as_str),
                 Some("plain")
@@ -327,7 +306,7 @@ mod tests {
             id,
             ext: Some("rs".to_string()),
         };
-        assert!(cache.get(&known, Mode::Source).is_none());
+        assert!(cache.get(&known, source(&known)).is_none());
     }
 
     /// The source view's output depends on the syntax, not on which of its extensions named it, so
@@ -345,7 +324,7 @@ mod tests {
         };
         cache.put(
             &stored,
-            Mode::Source,
+            source(&stored),
             Arc::new(String::from("rendered as markdown")),
         );
 
@@ -356,7 +335,7 @@ mod tests {
             };
             assert_eq!(
                 cache
-                    .get(&probe, Mode::Source)
+                    .get(&probe, source(&probe))
                     .as_deref()
                     .map(String::as_str),
                 Some("rendered as markdown"),
@@ -369,7 +348,7 @@ mod tests {
             id,
             ext: Some("rs".to_string()),
         };
-        assert!(cache.get(&other, Mode::Source).is_none());
+        assert!(cache.get(&other, source(&other)).is_none());
     }
 
     /// A rendered document is Markdown either way — `markdown::render` never sees the extension —
@@ -407,7 +386,7 @@ mod tests {
             id,
             ext: Some("rs".to_string()),
         };
-        assert!(cache.get(&known, Mode::Source).is_none());
+        assert!(cache.get(&known, source(&known)).is_none());
     }
 
     #[test]
