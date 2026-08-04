@@ -74,9 +74,14 @@ struct Handler {
 
 /// The metadata columns, in the order [`metadata_from_row`] expects them. Kept in one place so
 /// the metadata-only and full-entry queries cannot drift out of sync with the parser.
+///
+/// The remaining seconds are measured against `datetime('now')`, not `julianday('now')`: both
+/// sides then sit on a second boundary, so the count is exact and a negative one means precisely
+/// what a separate `expires < datetime('now')` column used to. Measuring against the current
+/// *instant* instead would round a paste that is one second from expiring down to nought.
 macro_rules! metadata_columns {
     () => {
-        "uid, title, CAST(ROUND((julianday(expires) - julianday('now')) * 86400) AS INTEGER), burn_after_reading, expires < datetime('now'), nonce IS NOT NULL"
+        "uid, title, CAST(ROUND((julianday(expires) - julianday(datetime('now'))) * 86400) AS INTEGER), burn_after_reading, nonce IS NOT NULL"
     };
 }
 
@@ -92,8 +97,9 @@ fn reply<T>(result: oneshot::Sender<T>, value: T) {
 
 /// Parse the leading metadata columns of a row into [`Metadata`] plus whether the entry expired.
 fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, bool)> {
-    let expiration = row
-        .get::<_, Option<i64>>(2)?
+    let remaining = row.get::<_, Option<i64>>(2)?;
+
+    let expiration = remaining
         .filter(|secs| *secs > 0)
         .and_then(|secs| u64::try_from(secs).ok())
         .map(|secs| Expiration {
@@ -106,17 +112,20 @@ fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, boo
             title: row.get::<_, Option<String>>(1)?,
             expiration,
             must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
-            is_encrypted: row.get::<_, Option<bool>>(5)?.unwrap_or(false),
+            is_encrypted: row.get::<_, Option<bool>>(4)?.unwrap_or(false),
         },
-        row.get::<_, Option<bool>>(4)?.unwrap_or(false),
+        // An entry with no expiry has no count and so never expires.
+        remaining.is_some_and(|secs| secs < 0),
     ))
 }
 
-/// Column index of the nonce in the full-entry query, i.e. the first one after
-/// [`metadata_columns!`] and the data blob.
-const NONCE_COLUMN: usize = 7;
+/// Column index of the data blob in the full-entry query, i.e. the first one after
+/// [`metadata_columns!`].
+const DATA_COLUMN: usize = 5;
+/// Column index of the nonce in the full-entry query.
+const NONCE_COLUMN: usize = 6;
 /// Column index of the per-entry salt in the full-entry query.
-const SALT_COLUMN: usize = 8;
+const SALT_COLUMN: usize = 7;
 
 /// Report a blob column that held something the domain type would not accept.
 fn blob_error(
@@ -640,7 +649,7 @@ impl Handler {
 
                 Ok((
                     read::DatabaseEntry {
-                        data: row.get(6)?,
+                        data: row.get(DATA_COLUMN)?,
                         metadata,
                         nonce,
                         salt,
