@@ -5,9 +5,12 @@ use axum_extra::extract::CookieJar;
 use crate::handlers::cookie;
 use crate::handlers::extract::{Preference, SafeReferer};
 
-/// GET handler to switch theme by setting the pref cookie and redirecting back to the referer.
+/// POST handler to switch theme by setting the pref cookie and redirecting back to the referer.
+///
+/// Storing the preference changes state, so it is not reachable by following a link — a
+/// prefetcher must not be able to retheme the site for a visitor.
 #[must_use]
-pub async fn get(
+pub async fn post(
     SafeReferer(redirect): SafeReferer,
     jar: CookieJar,
     Query(pref): Query<Preference>,
@@ -26,7 +29,7 @@ mod tests {
         let client = Client::new(StoreCookies(true)).await;
 
         let response = client
-            .get("/theme")
+            .post("/theme")
             .header(REFERER, "https://evil.example.com/phish?bait=1")
             .query(&[("pref", "dark")])
             .send()
@@ -49,7 +52,7 @@ mod tests {
             r"https://evil.example.com/\attacker.example.com",
         ] {
             let response = client
-                .get("/theme")
+                .post("/theme")
                 .header(REFERER, referer)
                 .query(&[("pref", "dark")])
                 .send()
@@ -68,7 +71,7 @@ mod tests {
         let client = Client::new(StoreCookies(true)).await;
 
         let response = client
-            .get("/theme")
+            .post("/theme")
             .header(REFERER, "//evil.example.com/phish")
             .query(&[("pref", "dark")])
             .send()
@@ -81,12 +84,46 @@ mod tests {
         Ok(())
     }
 
+    /// Storing the preference is a state change, so following a link must not perform it — a
+    /// prefetcher or a link-walking extension would otherwise retheme the site for the visitor.
+    #[tokio::test]
+    async fn get_does_not_switch_the_theme() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+
+        let response = client
+            .get("/theme")
+            .header(REFERER, "/")
+            .query(&[("pref", "dark")])
+            .send()
+            .await?;
+
+        assert_eq!(response.status(), reqwest::StatusCode::METHOD_NOT_ALLOWED);
+        assert!(response.cookies().all(|cookie| cookie.name() != "pref"));
+
+        Ok(())
+    }
+
+    /// The switcher has to submit, so it must render as a form rather than as links.
+    #[tokio::test]
+    async fn switcher_renders_as_forms() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let body = client.get("/").send().await?.text().await?;
+
+        assert!(
+            body.contains(r#"<form method="post" action="/theme?pref=dark""#),
+            "body: {body}"
+        );
+        assert!(!body.contains(r#"href="/theme"#), "body: {body}");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn redirect_with_cookie() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(true)).await;
 
         let response = client
-            .get("/theme")
+            .post("/theme")
             .header(REFERER, "/foo")
             .query(&[("pref", "dark")])
             .send()

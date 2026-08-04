@@ -320,7 +320,7 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
     let app = router
         .route("/", get(html::index::get).post(insert::api::post))
         .route("/robots.txt", get(robots::get))
-        .route("/theme", get(theme::get))
+        .route("/theme", post(theme::post))
         .route("/new", post(insert::form::post))
         .route("/qr/{id}", get(html::qr::get))
         .route(
