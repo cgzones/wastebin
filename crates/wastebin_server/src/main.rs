@@ -572,7 +572,15 @@ mod tests {
 
         // A route whose work goes to a blocking thread, so the request is certain to yield and
         // the already-elapsed timer is certain to win; a handler that never awaits can outrun it.
-        let res = client.get("/burn/aaaaaaaaaaa.txt").send().await?;
+        // Seeded rather than posted, because an insert through this client would time out too.
+        let id = client
+            .seed(wastebin_core::db::write::Entry {
+                text: String::from("FooBarBaz"),
+                ..Default::default()
+            })
+            .await?;
+
+        let res = client.get(&format!("/burn/{id}.txt")).send().await?;
         assert_eq!(res.status(), http::StatusCode::REQUEST_TIMEOUT);
 
         for header in [

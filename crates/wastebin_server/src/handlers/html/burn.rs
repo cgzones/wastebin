@@ -2,16 +2,17 @@ use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::{Path, State};
 
-use crate::Page;
 use crate::cache::Key;
 use crate::handlers::extract::{Accepts, Theme};
 use crate::handlers::html::qr::{code_for, dark_modules};
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
+use crate::{Database, Page};
 
 /// GET handler for the burn page.
 pub async fn get(
     Path(id): Path<String>,
+    State(db): State<Database>,
     State(page): State<Page>,
     theme: Theme,
     lang: Lang,
@@ -19,6 +20,13 @@ pub async fn get(
 ) -> Result<Burn, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
+
+        // This page only shares a paste — a link and a QR code pointing at it — so it has nothing
+        // to show once there is no paste. It answered 200 for every well-formed id, handing out a
+        // scannable code for an entry that was never there or had already been read. Metadata is
+        // enough to tell, and reading it never burns anything.
+        db.get_metadata(key.id).await?;
+
         let code = code_for(&page, &key).await?;
 
         Ok(Burn {
@@ -55,22 +63,76 @@ mod tests {
     use crate::test_helpers::Client;
     use crate::{handlers::insert::form::Entry, test_helpers::StoreCookies};
 
+    use reqwest::{StatusCode, header};
+
+    /// The page has to exist for this to prove anything: once a missing paste answers with the
+    /// error page, an id that was never inserted would pass simply by rendering nothing.
     #[tokio::test]
     async fn extension_is_escaped() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("FooBarBaz"),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
 
-        let body = client
-            .get("/burn/aaaaaaaaaaa.%22%3E%3Cimg%20src=x%3E")
+        let res = client.post_form().form(&data).send().await?;
+        let id = res
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()?
+            .replace("/burn/", "");
+
+        let res = client
+            .get(&format!("/burn/{id}.%22%3E%3Cimg%20src=x%3E"))
             .send()
-            .await?
-            .text()
             .await?;
 
+        assert_eq!(res.status(), StatusCode::OK);
+        let body = res.text().await?;
         assert!(!body.contains("<img src=x"), "raw markup leaked: {body}");
 
         Ok(())
     }
-    use reqwest::{StatusCode, header};
+
+    /// The page exists only to share a paste, so it has nothing to show once there is no paste.
+    /// It used to answer 200 for any well-formed id, handing out a scannable code for an entry
+    /// that was never there — or, after the reveal, for one that had just been destroyed.
+    #[tokio::test]
+    async fn a_paste_that_is_gone_has_no_burn_page() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client.get("/burn/aaaaaaaaaaa").send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "id never inserted");
+
+        let data = Entry {
+            text: String::from("secret-body-xyz"),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        // While the paste is still there the page is served as before.
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        // Reading it burns it, and the share page goes with it.
+        let res = client
+            .post(&format!("/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "paste was burned");
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn burn() -> Result<(), Box<dyn std::error::Error>> {

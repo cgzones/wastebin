@@ -168,8 +168,17 @@ mod tests {
     async fn an_unencodable_extension_is_a_bad_request() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
+        // The page checks the paste exists before encoding anything, so this needs a real one to
+        // reach the encoder at all.
+        let id = client
+            .seed(wastebin_core::db::write::Entry {
+                text: String::from("FooBarBaz"),
+                ..Default::default()
+            })
+            .await?;
+
         let res = client
-            .get(&format!("/burn/aaaaaaaaaaa.{}", "a".repeat(4096)))
+            .get(&format!("/burn/{id}.{}", "a".repeat(4096)))
             .send()
             .await?;
 
