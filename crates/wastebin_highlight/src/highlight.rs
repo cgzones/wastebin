@@ -1,9 +1,7 @@
 use std::fmt::Write;
 
 use syntect::html::{ClassStyle, ClassedHTMLGenerator, line_tokens_to_classed_spans};
-use syntect::parsing::{
-    BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxReference, SyntaxSet,
-};
+use syntect::parsing::{BasicScopeStackOp, ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxSet};
 use syntect::util::LinesWithEndings;
 
 #[expect(deprecated)]
@@ -22,10 +20,10 @@ const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
 #[derive(Clone)]
 pub struct Html(String);
 
-#[derive(Clone)]
 pub struct Highlighter {
     syntax_set: SyntaxSet,
-    ordered_syntaxes: Vec<SyntaxReference>,
+    /// Indices into `syntax_set.syntaxes()`, ordered by lower-cased syntax name.
+    ordered_syntaxes: Vec<usize>,
 }
 
 /// Syntax reference.
@@ -39,12 +37,13 @@ pub struct Syntax<'a> {
 impl Default for Highlighter {
     fn default() -> Self {
         let syntax_set = two_face::syntax::extra_newlines();
-        let mut syntaxes = syntax_set.syntaxes().to_vec();
-        syntaxes.sort_unstable_by_key(|s| s.name.to_lowercase());
+        let mut ordered_syntaxes: Vec<usize> = (0..syntax_set.syntaxes().len()).collect();
+        ordered_syntaxes
+            .sort_by_cached_key(|&i| syntax_set.syntaxes().get(i).map(|s| s.name.to_lowercase()));
 
         Self {
             syntax_set,
-            ordered_syntaxes: syntaxes,
+            ordered_syntaxes,
         }
     }
 }
@@ -302,9 +301,12 @@ impl Highlighter {
     /// Return iterator over all available [`Syntax`]es with their canonical name and usual file
     /// extensions.
     pub fn syntaxes(&self) -> impl Iterator<Item = Syntax<'_>> {
-        self.ordered_syntaxes.iter().map(|syntax| Syntax {
-            name: syntax.name.as_ref(),
-            extensions: syntax.file_extensions.as_slice(),
+        self.ordered_syntaxes.iter().filter_map(|&i| {
+            let syntax = self.syntax_set.syntaxes().get(i)?;
+            Some(Syntax {
+                name: syntax.name.as_ref(),
+                extensions: syntax.file_extensions.as_slice(),
+            })
         })
     }
 }
