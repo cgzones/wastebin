@@ -381,12 +381,16 @@ fn open_span_prefix(formatted: &str) -> usize {
 
 /// Modified version of [`syntect::html::line_tokens_to_classed_spans`] that outputs HTML anchors
 /// for Markdown links.
+///
+/// Appends to `s`, which the caller reuses across lines: a document is emitted one line at a time
+/// and a buffer of its own per line was an allocate-and-free per line of the paste.
 fn line_tokens_to_classed_spans_md(
     line: &str,
     ops: &[(usize, ScopeStackOp)],
     stack: &mut ScopeStack,
-) -> Result<(String, isize), syntect::Error> {
-    let mut s = String::with_capacity(line.len() + ops.len() * 8); // a guess
+    s: &mut String,
+) -> Result<isize, syntect::Error> {
+    s.reserve(line.len() + ops.len() * 8); // a guess
     let mut cur_index = 0;
     let mut span_delta = 0;
 
@@ -409,13 +413,13 @@ fn line_tokens_to_classed_spans_md(
                 if is_navigable_target(text) {
                     // Insert href and close attribute ...
                     s.push_str(r#"<a href=""#);
-                    escape(text, &mut s);
+                    escape(text, s);
                     s.push_str(r#"">"#);
                     link_open = true;
                 }
             }
 
-            escape(text, &mut s);
+            escape(text, s);
 
             cur_index = i;
         }
@@ -424,7 +428,7 @@ fn line_tokens_to_classed_spans_md(
                 span_start = s.len();
                 span_empty = true;
                 s.push_str("<span class=\"");
-                scope_to_classes(&mut s, scope);
+                scope_to_classes(s, scope);
                 s.push_str("\">");
                 span_delta += 1;
 
@@ -448,8 +452,8 @@ fn line_tokens_to_classed_spans_md(
             }
         })?;
     }
-    escape(&line[cur_index..line.len()], &mut s);
-    Ok((s, span_delta))
+    escape(&line[cur_index..line.len()], s);
+    Ok(span_delta)
 }
 
 impl Highlighter {
@@ -561,31 +565,52 @@ impl Highlighter {
 
         let mut budget = Budget::new();
 
+        // Reused by the two emitters this crate owns rather than allocated per line: a document is
+        // built one line at a time, so a buffer of its own each time was an allocate-and-free per
+        // line of the paste — a fifth of that loop on a large plain-text one. syntect's own
+        // emitter hands back a `String` and cannot join in.
+        let mut scratch = String::new();
+
         for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
-            let (formatted, delta) = if budget.skips(line) {
+            let syntect_line;
+            let formatted: &str;
+            let delta;
+
+            if budget.skips(line) {
                 // Too long, or past the time budget, to highlight — but it still goes into the
                 // page verbatim otherwise.
-                let mut escaped = String::with_capacity(line.len());
-                escape(line, &mut escaped);
-                (escaped, 0)
+                scratch.clear();
+                escape(line, &mut scratch);
+                formatted = &scratch;
+                delta = 0;
             } else {
                 let parsed = parse_state.parse_line(line, &self.syntax_set)?;
 
                 if is_markdown {
-                    line_tokens_to_classed_spans_md(line, parsed.as_slice(), &mut scope_stack)?
+                    scratch.clear();
+                    delta = line_tokens_to_classed_spans_md(
+                        line,
+                        parsed.as_slice(),
+                        &mut scope_stack,
+                        &mut scratch,
+                    )?;
+                    formatted = &scratch;
                 } else {
-                    line_tokens_to_classed_spans(
+                    let (emitted, emitted_delta) = line_tokens_to_classed_spans(
                         line,
                         parsed.as_slice(),
                         ClassStyle::Spaced,
                         &mut scope_stack,
-                    )?
+                    )?;
+                    syntect_line = emitted;
+                    delta = emitted_delta;
+                    formatted = &syntect_line;
                 }
-            };
+            }
 
             // After the emitters, so every one of them is covered, and before the span balance is
             // measured below — the wrappers are balanced pairs, so they do not disturb it.
-            let formatted = mark_deceptive_characters(&formatted);
+            let formatted = mark_deceptive_characters(formatted);
 
             let line_number = line_idx + 1;
             let _ = write!(html, r#"<div id="LC{line_number}">"#);
