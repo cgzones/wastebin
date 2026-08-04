@@ -1,28 +1,91 @@
-use axum::extract::Query;
+use axum::extract::{Query, State};
 use axum::response::IntoResponse;
 use axum_extra::extract::CookieJar;
 
+use crate::Page;
 use crate::handlers::cookie;
-use crate::handlers::extract::{Preference, SafeReferer};
+use crate::handlers::extract::{Accepts, Preference, RequestOrigin, SafeReferer, Theme};
+use crate::handlers::html::{ErrorResponse, make_error};
+use crate::i18n::Lang;
 
 /// POST handler to switch theme by setting the pref cookie and redirecting back to the referer.
 ///
 /// Storing the preference changes state, so it is not reachable by following a link — a
 /// prefetcher must not be able to retheme the site for a visitor.
-#[must_use]
 pub async fn post(
+    State(page): State<Page>,
     SafeReferer(redirect): SafeReferer,
+    origin: RequestOrigin,
     jar: CookieJar,
+    theme: Theme,
+    lang: Lang,
+    accepts: Accepts,
     Query(pref): Query<Preference>,
-) -> impl IntoResponse {
+) -> Result<impl IntoResponse, ErrorResponse> {
+    // The other two state-changing form routes already refuse this. Without it another site could
+    // auto-submit a form here, retheme the visitor, and take a 303 to a path of its choosing on
+    // this origin as well.
+    if origin.is_cross_site(&page.base_url) {
+        return Err(make_error(
+            crate::Error::CrossSite,
+            page,
+            theme,
+            lang,
+            accepts,
+        ));
+    }
+
     let cookie = cookie("pref", pref.pref.to_string());
-    (jar.add(cookie), redirect)
+
+    Ok((jar.add(cookie), redirect))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::test_helpers::{Client, StoreCookies};
     use http::header::REFERER;
+
+    /// Setting the preference is a state change, and this was the one such route with no origin
+    /// check: another site could auto-submit a form to it, retheme the visitor, and get a 303 to
+    /// a path of its choosing on this origin to boot.
+    #[tokio::test]
+    async fn a_cross_site_theme_change_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+
+        let response = client
+            .post("/theme")
+            .header(http::header::ORIGIN, "https://evil.example.com")
+            .header(REFERER, "https://evil.example.com/phish?bait=1")
+            .query(&[("pref", "dark")])
+            .send()
+            .await?;
+
+        assert_eq!(response.status(), http::StatusCode::FORBIDDEN);
+        assert!(
+            response.headers().get(http::header::SET_COOKIE).is_none(),
+            "preference was stored anyway"
+        );
+
+        Ok(())
+    }
+
+    /// The button on the site's own pages still has to work.
+    #[tokio::test]
+    async fn a_same_site_theme_change_still_works() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+
+        let response = client
+            .post("/theme")
+            .header(http::header::ORIGIN, client.origin())
+            .query(&[("pref", "dark")])
+            .send()
+            .await?;
+
+        assert!(response.status().is_redirection());
+        assert!(response.headers().get(http::header::SET_COOKIE).is_some());
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn external_referer_redirects_to_path_only() -> Result<(), Box<dyn std::error::Error>> {
