@@ -19,7 +19,7 @@ pub async fn get(
 ) -> Result<Burn, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
-        let code = code_for(&page, id).await?;
+        let code = code_for(&page, &key).await?;
 
         Ok(Burn {
             page: page.clone(),
