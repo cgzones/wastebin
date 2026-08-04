@@ -126,10 +126,6 @@ enum Command {
         id: Id,
         result: oneshot::Sender<Result<(Metadata, bool), Error>>,
     },
-    Delete {
-        id: Id,
-        result: oneshot::Sender<Result<(), Error>>,
-    },
     Take {
         id: Id,
         result: oneshot::Sender<Result<bool, Error>>,
@@ -514,7 +510,6 @@ impl Handler {
                 Command::Insert { entry, result } => reply(result, self.insert(entry)),
                 Command::Get { id, result } => reply(result, self.get(id)),
                 Command::GetMetadata { id, result } => reply(result, self.get_metadata(id)),
-                Command::Delete { id, result } => reply(result, self.delete(id)),
                 Command::Take { id, result } => reply(result, self.take(id)),
                 Command::DeleteMany { ids, result } => reply(result, self.delete_many(ids)),
                 Command::DeleteFor { id, uids, result } => {
@@ -641,13 +636,6 @@ impl Handler {
         )?;
 
         Ok(entry)
-    }
-
-    fn delete(&self, id: Id) -> Result<(), Error> {
-        self.conn
-            .execute("DELETE FROM entries WHERE id=?1", params![id.to_i64()])?;
-
-        Ok(())
     }
 
     /// Delete `id`, reporting whether this call is the one that removed the row.
@@ -831,7 +819,7 @@ impl Database {
 
     /// Delete paste with `id`.
     async fn delete(&self, id: Id) -> Result<(), Error> {
-        self.call(|result| Command::Delete { id, result }).await
+        self.take(id).await.map(drop)
     }
 
     /// Delete paste with `id`, reporting whether this call removed it.
