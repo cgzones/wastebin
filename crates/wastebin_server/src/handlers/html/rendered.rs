@@ -41,6 +41,7 @@ pub async fn get(
     State(page): State<Page>,
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
+    State(render_pool): State<crate::render::Renderer>,
     Path(id): Path<String>,
     uids: Option<Uids>,
     theme: Theme,
@@ -74,10 +75,10 @@ pub async fn get(
 
             let Data { text, metadata } = data;
             let highlighter = highlighter.clone();
-            let rendered: Arc<str> =
-                tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
-                    .await??
-                    .into_inner();
+            let rendered: Arc<str> = render_pool
+                .run(move || markdown::render(&text, &highlighter))
+                .await??
+                .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache rendered markdown");

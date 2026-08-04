@@ -155,10 +155,11 @@ pub async fn get(
             let Data { text, metadata } = data;
             let ext = key.ext.clone();
             let highlighter = highlighter.clone();
-            let html: Arc<str> =
-                tokio::task::spawn_blocking(move || highlighter.highlight(text, ext))
-                    .await??
-                    .into_inner();
+            let html: Arc<str> = appstate
+                .renderer
+                .run(move || highlighter.highlight(text, ext))
+                .await??
+                .into_inner();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");

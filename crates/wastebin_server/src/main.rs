@@ -5,6 +5,7 @@ mod errors;
 mod handlers;
 mod i18n;
 mod page;
+mod render;
 #[cfg(test)]
 mod test_helpers;
 
@@ -34,6 +35,7 @@ use crate::errors::Error;
 use crate::handlers::extract::Theme;
 use crate::handlers::{delete, download, html, insert, raw, robots, theme};
 use crate::i18n::Lang;
+use crate::render::Renderer;
 use wastebin_core::db::Database;
 use wastebin_core::env as core_env;
 
@@ -50,6 +52,7 @@ pub(crate) struct AppState {
     key: Key,
     page: Page,
     highlighter: Highlighter,
+    renderer: Renderer,
     ratelimit_insert: Option<Arc<Ratelimiter>>,
     ratelimit_delete: Option<Arc<Ratelimiter>>,
 }
@@ -81,6 +84,12 @@ impl FromRef<AppState> for Database {
 impl FromRef<AppState> for Cache {
     fn from_ref(state: &AppState) -> Self {
         state.cache.clone()
+    }
+}
+
+impl FromRef<AppState> for Renderer {
+    fn from_ref(state: &AppState) -> Self {
+        state.renderer.clone()
     }
 }
 
@@ -297,6 +306,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         key,
         page,
         highlighter,
+        renderer: Renderer::with_available_parallelism(),
         ratelimit_insert,
         ratelimit_delete,
     };

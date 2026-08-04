@@ -53,6 +53,7 @@ impl Client {
             key,
             page,
             highlighter: Arc::new(Highlighter::default()),
+            renderer: crate::render::Renderer::with_available_parallelism(),
             ratelimit_insert: Some(Arc::new(
                 Ratelimiter::builder(60)
                     .max_tokens(60)

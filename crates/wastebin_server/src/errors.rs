@@ -30,6 +30,11 @@ pub(crate) enum Error {
     RateLimit,
     #[error("expires too far in the future")]
     TooLongExpires,
+    /// The request that asked for this render is gone, so the answer is never sent anywhere.
+    #[error("render abandoned by its caller")]
+    Abandoned,
+    #[error("renderer is gone")]
+    RendererGone,
 }
 
 #[derive(Serialize)]
@@ -61,6 +66,8 @@ impl From<Error> for StatusCode {
             Error::Join(_)
             | Error::QrCode(_)
             | Error::Database(_)
+            | Error::Abandoned
+            | Error::RendererGone
             | Error::SyntaxHighlighting(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
