@@ -25,18 +25,104 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
     builder
 });
 
+/// Deepest markup nesting handed to the sanitizer.
+///
+/// Building the DOM is quadratic in nesting depth, and raw HTML in a paste reaches it verbatim:
+/// a megabyte of `<div>` is a quarter million levels deep and costs minutes of CPU. Prose does not
+/// come close to this bound — deeply nested lists sit around a dozen levels.
+const MAX_NESTING_DEPTH: usize = 256;
+
+/// HTML elements that never open a level, so they must not count towards the depth.
+const VOID_ELEMENTS: [&str; 14] = [
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
+
+/// Leading run of `fragment` that forms a tag name, empty when it names nothing.
+fn tag_name(fragment: &str) -> &str {
+    let len = fragment
+        .find(|c: char| !c.is_ascii_alphanumeric())
+        .unwrap_or(fragment.len());
+
+    &fragment[..len]
+}
+
+/// Return the deepest element nesting in `html`.
+///
+/// This walks the tag soup the parser produced rather than a tree, so it is an approximation.
+/// Overstating is safe — it only rejects — but understating hands the sanitizer the very tree the
+/// limit exists to refuse, so every approximation here has to round upwards.
+///
+/// That is why the open elements are tracked by name rather than counted. html5ever drops a close
+/// tag naming nothing that is open, so treating one as closing a level let `<div></span>` report
+/// depth 1 however often it was repeated, while the parser really nested every `div`.
+fn nesting_depth(html: &str) -> usize {
+    let mut open: Vec<&str> = Vec::new();
+    let mut max_depth: usize = 0;
+
+    for fragment in html.split('<').skip(1) {
+        if let Some(rest) = fragment.strip_prefix('/') {
+            let name = tag_name(rest);
+            if name.is_empty() {
+                continue;
+            }
+
+            // Closing an element also closes whatever is still open inside it; a name that is not
+            // open closes nothing at all.
+            if let Some(at) = open.iter().rposition(|el| el.eq_ignore_ascii_case(name)) {
+                open.truncate(at);
+            }
+
+            continue;
+        }
+
+        // Comments, doctypes and bare `<` in text open nothing.
+        let name = tag_name(fragment);
+        if name.is_empty() {
+            continue;
+        }
+
+        let self_closing = fragment[name.len()..]
+            .split('>')
+            .next()
+            .is_some_and(|attrs| attrs.trim_end().ends_with('/'));
+
+        if self_closing || VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) {
+            continue;
+        }
+
+        open.push(name);
+        max_depth = max_depth.max(open.len());
+
+        // Nothing past the limit needs measuring, and stopping bounds both this scan and the
+        // stack it walks — without it, a document of unmatched close tags would be quadratic.
+        if max_depth > MAX_NESTING_DEPTH {
+            break;
+        }
+    }
+
+    max_depth
+}
+
 /// Render `CommonMark` `text` to HTML. Fenced code blocks with a known language are syntax
 /// highlighted via `highlighter`; unknown languages fall back to plain text.
 ///
 /// Raw HTML embedded in the source is passed through the parser and then sanitized by
 /// [`ammonia`], so tags like `<details>` or `<kbd>` survive while `<script>`, inline event
 /// handlers, `javascript:` URLs and other XSS vectors are stripped.
+///
+/// Markup nested deeper than [`MAX_NESTING_DEPTH`] is rejected instead of sanitized.
 pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
     let parser = Parser::new_ext(text, OPTIONS);
     let events = rewrite_events(parser, highlighter)?;
 
     let mut raw = String::with_capacity(text.len());
     html::push_html(&mut raw, events.into_iter());
+
+    let depth = nesting_depth(&raw);
+    if depth > MAX_NESTING_DEPTH {
+        return Err(Error::TooDeeplyNested(MAX_NESTING_DEPTH));
+    }
 
     Ok(Html::new(SANITIZER.clean(&raw).to_string()))
 }
@@ -217,6 +303,59 @@ mod tests {
         assert!(!html.contains("javascript:"), "got: {html}");
         assert!(!html.contains("onclick"), "got: {html}");
         Ok(())
+    }
+
+    #[test]
+    fn deeply_nested_markup_is_rejected() {
+        let md = "<div>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
+    /// html5ever discards a close tag naming nothing that is open, so it must not cancel an open
+    /// level here either. Letting it decrement made `<div></span>` report depth 1 however often it
+    /// was repeated, walking the limit straight past the sanitizer it guards.
+    #[test]
+    fn a_close_tag_matching_nothing_open_does_not_reduce_the_depth() {
+        assert_eq!(nesting_depth("<div></span>"), 1);
+        assert_eq!(nesting_depth(&"<div></span>".repeat(5)), 5);
+    }
+
+    #[test]
+    fn nesting_hidden_behind_unmatched_close_tags_is_rejected() {
+        let md = "<div></span>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_renders() -> Result<(), Box<dyn std::error::Error>> {
+        let md = "<div>".repeat(32);
+        let html = render_string(&md, &Highlighter::default())?;
+        assert!(html.contains("<div>"), "got: {html}");
+        Ok(())
+    }
+
+    #[test]
+    fn flat_markup_is_not_mistaken_for_nesting() -> Result<(), Box<dyn std::error::Error>> {
+        // Siblings and void elements open no levels, so a long flat document must render.
+        let md = format!("{}\n\n{}", "<div>x</div>".repeat(500), "<br>".repeat(500));
+        let html = render_string(&md, &Highlighter::default())?;
+        assert!(html.contains("<div>"), "got: {html}");
+        Ok(())
+    }
+
+    #[test]
+    fn nesting_depth_counts_levels_not_tags() {
+        assert_eq!(nesting_depth(""), 0);
+        assert_eq!(nesting_depth("<p>hi</p>"), 1);
+        assert_eq!(nesting_depth("<div><p>hi</p></div>"), 2);
+        assert_eq!(nesting_depth("<p>a</p><p>b</p>"), 1);
+        assert_eq!(nesting_depth("<br><br><br>"), 0);
+        assert_eq!(nesting_depth("<img src=\"x\"/>"), 0);
+        assert_eq!(nesting_depth("<div/><div/>"), 0);
+        // Text containing a bare `<` must not be read as markup.
+        assert_eq!(nesting_depth("1 < 2"), 0);
     }
 
     #[test]

@@ -16,6 +16,8 @@ pub enum Error {
     SyntaxHighlighting(#[from] syntect::Error),
     #[error("syntax parsing error: {0}")]
     SyntaxParsing(#[from] syntect::parsing::ParsingError),
+    #[error("markup nested deeper than {0} levels")]
+    TooDeeplyNested(usize),
 }
 
 const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
