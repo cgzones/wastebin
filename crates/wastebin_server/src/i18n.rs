@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(Lang::De.duration(&singular), "1 Tag");
         assert_eq!(Lang::Zh.duration(&singular), "1 天");
 
-        let never: Expiration = "0=d".parse().unwrap();
+        let never: Expiration = "0".parse().unwrap();
         assert_eq!(Lang::En.duration(&never), "never");
         assert_eq!(Lang::De.duration(&never), "nie");
         assert_eq!(Lang::Zh.duration(&never), "永不");
