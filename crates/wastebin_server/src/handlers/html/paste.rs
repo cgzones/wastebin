@@ -85,6 +85,19 @@ pub async fn get(
             .as_ref()
             .map(|Uids(list)| list.clone())
             .unwrap_or_default();
+
+        // The first entry is the identity this browser files its own pastes under. A claimed uid
+        // must never take that slot: a visitor who follows someone else's handoff link would
+        // otherwise create every later paste under that person's identity, handing them the right
+        // to delete it. Mint an own uid first so the claim can only ever be appended.
+        if new_uids.is_empty() {
+            let own_uid = db
+                .next_uid()
+                .await
+                .map_err(|err| make_error(err.into(), page.clone(), theme, lang))?;
+            new_uids.push(own_uid);
+        }
+
         if !new_uids.contains(&claimed_uid) {
             new_uids.push(claimed_uid);
         }
@@ -198,6 +211,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_handoff_does_not_capture_later_pastes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // No cookie store: both identities are driven through explicit `Cookie` headers so one
+        // server serves the attacker and the victim.
+        let client = Client::new(StoreCookies(false)).await;
+
+        // The attacker creates a paste and gets a signed token for their own uid. For a
+        // single-entry list that token is also a valid `uid` cookie value.
+        let attacker = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "attacker paste".to_string(),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        // A fresh visitor follows the handoff link and is given a uid cookie.
+        let res = client
+            .get(&attacker.path)
+            .query(&[("owner", &attacker.owner)])
+            .send()
+            .await?;
+        let victim_cookie = res
+            .headers()
+            .get("set-cookie")
+            .expect("handoff sets a uid cookie")
+            .to_str()?
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
+
+        // The visitor now creates their own paste while carrying that cookie.
+        let res = client
+            .post_form()
+            .header("cookie", &victim_cookie)
+            .form(&Entry {
+                text: String::from("victim confidential"),
+                ..Default::default()
+            })
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        // The attacker, holding only their own identity, must not be able to delete it.
+        let res = client
+            .delete(&location)
+            .header("cookie", format!("uid={}", attacker.owner))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::OK, "victim's paste was destroyed");
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn paste_responses_are_not_cacheable() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
@@ -254,7 +330,8 @@ mod tests {
             .await?;
 
         let res = client
-            .get(&format!("/%2F%2Fevil.example.com?owner={}", payload.owner))
+            .get("/%2F%2Fevil.example.com")
+            .query(&[("owner", &payload.owner)])
             .send()
             .await?;
 

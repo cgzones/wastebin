@@ -75,6 +75,10 @@ pub async fn post(
     async {
         // Pick the existing primary uid (first in the cookie list) or mint a new one.
         // Re-set the cookie with the full list unchanged so claimed uids survive.
+        //
+        // Only the first entry is ever used to tag a new paste. Uids claimed through the
+        // `?owner=` handoff are appended behind it, so they grant deletion rights over the
+        // pastes they came with but never capture what this client creates afterwards.
         let mut uids = uids.map(|Uids(uids)| uids).unwrap_or_default();
         let primary = if let Some(uid) = uids.first().copied() {
             uid
