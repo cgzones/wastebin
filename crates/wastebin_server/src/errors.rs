@@ -74,6 +74,9 @@ impl Error {
             Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
                 "error.too_deeply_nested"
             }
+            Error::SyntaxHighlighting(wastebin_highlight::Error::TooLarge(_)) => {
+                "error.render_too_large"
+            }
             Error::Join(_)
             | Error::QrCode(_)
             | Error::Database(_)
@@ -121,9 +124,10 @@ impl From<&Error> for StatusCode {
             | Error::InvalidExtension
             | Error::EmptyPaste
             | Error::TooLongExpires
-            | Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
-                StatusCode::BAD_REQUEST
-            }
+            | Error::SyntaxHighlighting(
+                wastebin_highlight::Error::TooDeeplyNested(_)
+                | wastebin_highlight::Error::TooLarge(_),
+            ) => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,

@@ -150,6 +150,7 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "error.unsupported_media_type" => "That content type is not supported here.",
     "error.method_not_allowed" => "That method is not allowed on this address.",
     "error.too_deeply_nested" => "This paste is nested too deeply to render.",
+    "error.render_too_large" => "This paste is too large to display. The raw view and the download still serve it.",
     "error.internal" => "Something went wrong on the server.",
 
     "qr.label" => "qr code",
@@ -244,6 +245,7 @@ static DE: phf::Map<&'static str, &'static str> = phf_map! {
     "error.unsupported_media_type" => "Dieser Inhaltstyp wird hier nicht unterstützt.",
     "error.method_not_allowed" => "Diese Methode ist unter dieser Adresse nicht erlaubt.",
     "error.too_deeply_nested" => "Dieser Paste ist zu tief verschachtelt, um dargestellt zu werden.",
+    "error.render_too_large" => "Dieser Paste ist zu groß für die Anzeige. Die Rohansicht und der Download liefern ihn weiterhin aus.",
     "error.internal" => "Auf dem Server ist etwas schiefgelaufen.",
 
     "qr.label" => "QR-Code",
@@ -339,6 +341,7 @@ static ZH: phf::Map<&'static str, &'static str> = phf_map! {
     "error.unsupported_media_type" => "此处不支持该内容类型。",
     "error.method_not_allowed" => "该地址不允许使用此方法。",
     "error.too_deeply_nested" => "该剪贴嵌套层级过深，无法渲染。",
+    "error.render_too_large" => "该剪贴过大，无法显示。原始视图和下载仍可获取。",
     "error.internal" => "服务器发生了错误。",
 
     "qr.label" => "二维码",

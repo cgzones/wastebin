@@ -1,5 +1,6 @@
 use std::fmt::Write;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use syntect::html::{ClassStyle, ClassedHTMLGenerator, line_tokens_to_classed_spans};
 use syntect::parsing::{
@@ -18,9 +19,29 @@ pub enum Error {
     SyntaxParsing(#[from] syntect::parsing::ParsingError),
     #[error("markup nested deeper than {0} levels")]
     TooDeeplyNested(usize),
+    #[error("rendered output would exceed {0} bytes")]
+    TooLarge(usize),
 }
 
 const HIGHLIGHT_LINE_LENGTH_CUTOFF: usize = 2048;
+
+/// Largest document one render may emit.
+///
+/// Every line is wrapped in gutter and row markup, so the rendered size follows the line count
+/// rather than the byte count: a paste of nothing but newlines expanded by 78x, turning a 1 MiB
+/// body into 81 MB held whole in memory, per request, and far too large for the cache to ever
+/// absorb — so every fetch paid for it again. The bound is on what one response may cost, not on
+/// what a paste may hold: `/raw` and the download still serve the bytes.
+const MAX_RENDERED_BYTES: usize = 16 * 1024 * 1024;
+
+/// How long one render may spend in the syntax engine before the rest is emitted unhighlighted.
+///
+/// The syntax is chosen by the URL's extension, and the regex-heavy ones cost orders of magnitude
+/// more per byte than plain text — the same 1 MiB paste read as Perl took 43 s of a core versus
+/// 0.4 s as text, and a caller may ask for that as often as it likes. Degrading to plain rows
+/// keeps the page correct; each row is already self-contained, which is what lets highlighting
+/// stop part-way through a document.
+const HIGHLIGHT_TIME_BUDGET: Duration = Duration::from_secs(2);
 
 /// Name syntect gives the Markdown syntax.
 const MARKDOWN_SYNTAX_NAME: &str = "Markdown";
@@ -241,13 +262,23 @@ impl Highlighter {
                 html,
                 r##"<div id="L{line_number}"><a href="#L{line_number}">{line_number}</a></div>"##
             );
+
+            if html.len() > MAX_RENDERED_BYTES {
+                return Err(Error::TooLarge(MAX_RENDERED_BYTES));
+            }
         }
 
         html.push_str(r#"</div><div class="src-code"><code>"#);
 
+        let started = Instant::now();
+        // Set once the syntax engine has had its budget; the remaining lines are escaped only.
+        let mut plain_from_here = false;
+
         for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
-            let (formatted, delta) = if line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
-                // Too long to highlight, but it still goes into the page verbatim otherwise.
+            let (formatted, delta) = if plain_from_here || line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF
+            {
+                // Too long, or past the time budget, to highlight — but it still goes into the
+                // page verbatim otherwise.
                 let mut escaped = String::with_capacity(line.len());
                 escape(line, &mut escaped);
                 (escaped, 0)
@@ -282,6 +313,14 @@ impl Highlighter {
             ));
 
             html.push_str("</div>");
+
+            if html.len() > MAX_RENDERED_BYTES {
+                return Err(Error::TooLarge(MAX_RENDERED_BYTES));
+            }
+
+            if !plain_from_here && started.elapsed() > HIGHLIGHT_TIME_BUDGET {
+                plain_from_here = true;
+            }
         }
 
         html.push_str("</code></div>");
@@ -351,6 +390,37 @@ impl Html {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Row and gutter markup follows the line count, not the byte count, so a body of newlines
+    /// rendered to nearly a hundred times its size — buffered whole, per request, and too big for
+    /// the cache to hold, so nothing ever amortised it.
+    #[test]
+    fn a_render_far_larger_than_its_input_is_refused() {
+        let highlighter = Highlighter::default();
+        // Well under a default `WASTEBIN_MAX_BODY_SIZE`, and 81 MB of HTML before the bound.
+        let text = "\n".repeat(1024 * 1024);
+
+        assert!(
+            matches!(
+                highlighter.highlight(text, Some("txt".into())),
+                Err(Error::TooLarge(_))
+            ),
+            "an enormous render was produced anyway"
+        );
+    }
+
+    /// The bound must not be reachable by anything a person would actually paste.
+    #[test]
+    fn an_ordinary_paste_still_renders() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        let text = "fn main() { println!(\"hello\"); }\n".repeat(10_000);
+
+        let html = highlighter.highlight(text, Some("rs".into()))?.into_inner();
+
+        assert!(html.contains("id=\"LC10000\""), "last row missing");
+
+        Ok(())
+    }
 
     #[test]
     fn long_lines_are_escaped() -> Result<(), Box<dyn std::error::Error>> {
