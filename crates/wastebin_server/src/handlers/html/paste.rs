@@ -3,7 +3,7 @@ use std::sync::Arc;
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
-use axum::extract::{Form, Path, Query, State};
+use axum::extract::{Form, FromRef, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::SignedCookieJar;
 use axum_extra::extract::cookie::Key as CookieKey;
@@ -14,7 +14,7 @@ use crate::handlers::extract::{Accepts, Theme, Uids, can_delete, verify_owner_to
 use crate::handlers::html::{
     BurnConfirmation, ErrorResponse, FormAction, make_error, password_input,
 };
-use crate::handlers::{NoStore, uid_cookie};
+use crate::handlers::{NoStore, PasswordRatelimit, uid_cookie};
 use crate::i18n::Lang;
 use crate::{AppState, Page};
 use wastebin_core::crypto::Password;
@@ -133,6 +133,7 @@ pub async fn get(
             .map(|password| Password::from(password.as_bytes().to_vec()));
         let confirmed = form.as_ref().and_then(|form| form.confirm_burn.as_deref()) == Some("1");
         let no_password = password.is_none();
+
         // This route is also every single-segment path no other route claimed, so a value that is
         // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
         // "that is not a valid paste identifier" described a paste the visitor never asked for.
@@ -140,6 +141,12 @@ pub async fn get(
         // saying so, since there the caller did mean to address one.
         let key: Key = id.parse().map_err(|_| crate::Error::RouteNotFound)?;
         let metadata = db.get_metadata(key.id).await?;
+
+        // Only an attempt that reaches argon2 is worth a token; see `raw::get`. The metadata read
+        // above already settled whether this paste can derive anything.
+        if !no_password && metadata.is_encrypted {
+            PasswordRatelimit::from_ref(&appstate).check()?;
+        }
 
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {

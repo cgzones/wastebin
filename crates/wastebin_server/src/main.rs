@@ -57,6 +57,7 @@ pub(crate) struct AppState {
     renderer: Renderer,
     ratelimit_insert: Option<Arc<Ratelimiter>>,
     ratelimit_delete: Option<Arc<Ratelimiter>>,
+    ratelimit_password: Option<Arc<Ratelimiter>>,
 }
 
 impl FromRef<AppState> for Key {
@@ -404,6 +405,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let title = env::title()?;
     let ratelimit_insert = env::ratelimit_insert()?;
     let ratelimit_delete = env::ratelimit_delete()?;
+    let ratelimit_password = env::ratelimit_password()?;
     let max_expiration = env::max_expiration()?;
     env::validate_expirations(&expirations, max_expiration)?;
 
@@ -422,6 +424,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("enforcing a maximum expiry of {max_expiration:?}");
     tracing::debug!("ratelimiting insert amount to {ratelimit_insert:?} per second");
     tracing::debug!("ratelimiting delete attempts to {ratelimit_delete:?} per second");
+    tracing::debug!("ratelimiting password attempts to {ratelimit_password:?} per second");
 
     let page = Arc::new(page::Page::new(
         title,
@@ -433,6 +436,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     ));
     let ratelimit_insert = ratelimit_insert.map(make_ratelimiter);
     let ratelimit_delete = ratelimit_delete.map(make_ratelimiter);
+    let ratelimit_password = ratelimit_password.map(make_ratelimiter);
     let state = AppState {
         db,
         cache,
@@ -442,6 +446,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         renderer: Renderer::with_available_parallelism(),
         ratelimit_insert,
         ratelimit_delete,
+        ratelimit_password,
     };
 
     let app = make_app(state, timeout, max_body_size);

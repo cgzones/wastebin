@@ -9,7 +9,8 @@ use axum_extra::extract::cookie::Key;
 use wastebin_core::env::var;
 use wastebin_core::env::vars::{
     self, ADDRESS_PORT, BASE_URL, CACHE_MAX_BYTES, CACHE_SIZE, HTTP_TIMEOUT, MAX_BODY_SIZE,
-    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT, SIGNING_KEY,
+    PASTE_EXPIRATIONS, PASTE_MAX_EXPIRATION, RATELIMIT_DELETE, RATELIMIT_INSERT,
+    RATELIMIT_PASSWORD, SIGNING_KEY,
 };
 use wastebin_core::{db, expiration, expiration::Expiration};
 use wastebin_highlight::{Theme, theme::ParseThemeNameError};
@@ -54,6 +55,8 @@ pub(crate) enum Error {
     RatelimitInsert(ParseIntError),
     #[error("failed to parse {RATELIMIT_DELETE}: {0}")]
     RatelimitDelete(ParseIntError),
+    #[error("failed to parse {RATELIMIT_PASSWORD}: {0}")]
+    RatelimitPassword(ParseIntError),
 }
 
 pub(crate) enum SocketType {
@@ -232,6 +235,10 @@ pub fn ratelimit_insert() -> Result<Option<NonZeroU32>, Error> {
 
 pub fn ratelimit_delete() -> Result<Option<NonZeroU32>, Error> {
     ratelimit(vars::RATELIMIT_DELETE, Error::RatelimitDelete)
+}
+
+pub fn ratelimit_password() -> Result<Option<NonZeroU32>, Error> {
+    ratelimit(vars::RATELIMIT_PASSWORD, Error::RatelimitPassword)
 }
 
 #[cfg(test)]

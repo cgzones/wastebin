@@ -45,6 +45,7 @@ pub async fn get(
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
     State(render_pool): State<crate::render::Renderer>,
+    State(ratelimit): State<crate::handlers::PasswordRatelimit>,
     Path(id): Path<String>,
     uids: Option<Uids>,
     theme: Theme,
@@ -67,6 +68,12 @@ pub async fn get(
         let no_password = password.is_none();
         let key: Key = id.parse()?;
         let metadata = db.get_metadata(key.id).await?;
+
+        // Only an attempt that reaches argon2 is worth a token; see `raw::get`. The metadata read
+        // above already settled whether this paste can derive anything.
+        if !no_password && metadata.is_encrypted {
+            ratelimit.check()?;
+        }
 
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {
@@ -174,6 +181,40 @@ mod tests {
     use crate::handlers::insert::form::Entry;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::{StatusCode, header};
+
+    /// An empty field is not an attempt. Taking it for one ran a derivation that could only fail,
+    /// answering "wrong password" to someone who supplied none — and the source view already
+    /// treats it as absent.
+    #[tokio::test]
+    async fn an_empty_password_is_no_attempt() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# Hello"),
+            extension: Some(String::from("md")),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.trim_start_matches('/');
+
+        let res = client
+            .post(&format!("/md/{id}"))
+            .form(&[("password", "")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(
+            res.text().await?.contains("type=\"password\""),
+            "expected the prompt, not a failed attempt"
+        );
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn renders_markdown_as_html() -> Result<(), Box<dyn std::error::Error>> {

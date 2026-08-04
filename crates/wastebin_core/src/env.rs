@@ -44,6 +44,8 @@ pub mod vars {
     pub const RATELIMIT_INSERT: &str = "WASTEBIN_RATELIMIT_INSERT";
     /// Delete rate-limit.
     pub const RATELIMIT_DELETE: &str = "WASTEBIN_RATELIMIT_DELETE";
+    /// Password-attempt rate-limit.
+    pub const RATELIMIT_PASSWORD: &str = "WASTEBIN_RATELIMIT_PASSWORD";
 }
 
 /// Read `name` from the environment.
