@@ -731,12 +731,27 @@ impl Handler {
     }
 
     fn delete_for(&self, id: Id, uids: &[i64]) -> Result<(), Error> {
+        const PREFIX: &str = "DELETE FROM entries WHERE id=? AND uid IN (";
+
         if uids.is_empty() {
             return Err(Error::Delete);
         }
 
-        let placeholders = vec!["?"; uids.len()].join(",");
-        let delete_sql = format!("DELETE FROM entries WHERE id=? AND uid IN ({placeholders})");
+        // Built in one buffer: a `Vec` of placeholders joined into a `String` and then formatted
+        // into another spent three allocations on a statement of a few dozen bytes. Each uid adds
+        // a placeholder and a separator, and the closing parenthesis takes the last separator's
+        // place, so the capacity below is exact and the buffer is never grown.
+        let mut delete_sql = String::with_capacity(PREFIX.len() + uids.len() * 2);
+        delete_sql.push_str(PREFIX);
+
+        for index in 0..uids.len() {
+            if index != 0 {
+                delete_sql.push(',');
+            }
+            delete_sql.push('?');
+        }
+
+        delete_sql.push(')');
 
         // Not cached: the text varies with the number of uids, so caching it would spend a slot
         // per owner count and push the fixed statements out of a cache sized for them.
