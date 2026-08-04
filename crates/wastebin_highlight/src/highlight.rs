@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -80,6 +81,28 @@ impl Default for Highlighter {
 }
 
 /// Escape HTML tags in `s` and write output to `buf`.
+/// Rewrite the C0 controls that are not valid in an HTML document to U+FFFD.
+///
+/// A paste is arbitrary text, but every view of it is an HTML document, where these are not valid
+/// content: a parser must rewrite U+0000 and is free to mangle the rest, so what reaches the
+/// browser would not be what was emitted. Applied to the source rather than to each emitter's
+/// output because most lines are written by syntect's tokeniser, which shares no escaper with this
+/// crate. Borrows unless there is something to replace, which is almost always. `/raw` does not go
+/// through here and still answers with the stored bytes.
+pub(crate) fn replace_control_characters(text: &str) -> Cow<'_, str> {
+    // Tab, newline and return are the three the format allows, and both the line splitting here
+    // and Markdown's block structure are built on the latter two.
+    fn invalid(c: char) -> bool {
+        c.is_control() && !matches!(c, '\t' | '\n' | '\r')
+    }
+
+    if text.contains(invalid) {
+        Cow::Owned(text.replace(invalid, "\u{fffd}"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
 fn escape(s: &str, buf: &mut String) {
     // Because the internet is always right, turns out there's not that many
     // characters to escape: http://stackoverflow.com/questions/7381974
@@ -290,6 +313,12 @@ impl Highlighter {
     /// Highlight `text` with the given file extension which is used to
     /// determine the right syntax. If not given or does not exist, plain text will be generated.
     pub fn highlight(&self, text: String, ext: Option<String>) -> Result<Html, Error> {
+        // Before anything looks at it: most lines are emitted by syntect's own tokeniser, which
+        // never reaches the escaper below, so this is the only point every path shares.
+        let text = match replace_control_characters(&text) {
+            Cow::Owned(cleaned) => cleaned,
+            Cow::Borrowed(_) => text,
+        };
         let syntax_ref = self.syntax_for(ext.as_deref());
         let is_markdown = syntax_ref.name == MARKDOWN_SYNTAX_NAME;
         let mut parse_state = ParseState::new(syntax_ref);
@@ -466,6 +495,51 @@ impl Html {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A paste is arbitrary text, but the view of it is an HTML document. C0 controls are not
+    /// valid there — a parser must rewrite U+0000 and is free to mangle the rest.
+    ///
+    /// Asserted through `highlight` rather than through `escape`, because most lines never reach
+    /// that escaper: only Markdown and the over-budget fast path use it, while everything else is
+    /// emitted by syntect's own tokeniser. Guarding the escaper alone left every ordinary paste —
+    /// `.txt`, `.rs`, anything with a syntax — leaking them anyway.
+    #[test]
+    fn control_characters_do_not_reach_the_markup() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+
+        // `txt` and `rs` take the syntect path; `md` takes this crate's own emitter.
+        for ext in ["txt", "rs", "md"] {
+            let html = highlighter
+                .highlight("a\u{0}b\u{7}c\u{1b}d\u{7f}e".to_string(), Some(ext.into()))?
+                .into_inner();
+
+            for control in ['\u{0}', '\u{7}', '\u{1b}', '\u{7f}'] {
+                assert!(!html.contains(control), "ext {ext}: {control:?} survived");
+            }
+            assert!(
+                html.contains("a\u{fffd}b\u{fffd}c\u{fffd}d\u{fffd}e"),
+                "ext {ext}: {html}"
+            );
+        }
+
+        // Tab is content and the line breaks drive the gutter, so all three are left alone.
+        let html = highlighter
+            .highlight("a\tb\nc\r\nd".to_string(), Some("txt".into()))?
+            .into_inner();
+        assert!(html.contains("a\tb"), "{html}");
+        assert!(
+            html.contains(r##"href="#L3""##),
+            "line count changed: {html}"
+        );
+
+        // Escaping still happens and multi-byte text survives intact.
+        let html = highlighter
+            .highlight("<b>\u{0}héllo 世界".to_string(), Some("txt".into()))?
+            .into_inner();
+        assert!(html.contains("&lt;b&gt;\u{fffd}héllo 世界"), "{html}");
+
+        Ok(())
+    }
 
     /// Row and gutter markup follows the line count, not the byte count, so a body of newlines
     /// rendered to nearly a hundred times its size — buffered whole, per request, and too big for
