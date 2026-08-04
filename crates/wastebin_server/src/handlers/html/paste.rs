@@ -159,7 +159,11 @@ pub async fn get(
                 theme,
                 lang,
                 id,
-                title: metadata.title.clone(),
+                // The interstitial comes before any password is asked for, and the title is not
+                // encrypted along with the content.
+                title: (!metadata.is_encrypted)
+                    .then(|| metadata.title.clone())
+                    .flatten(),
             }
             .into_response());
         }
@@ -252,6 +256,34 @@ mod tests {
             let res = client.get(path).send().await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "path {path}");
         }
+
+        Ok(())
+    }
+
+    /// The interstitial is shown before any password is asked for, so an encrypted
+    /// burn-after-reading paste handed its title to whoever opened the link.
+    #[tokio::test]
+    async fn the_burn_interstitial_keeps_an_encrypted_title_back()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let paste = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "FooBarBaz".to_string(),
+                title: Some("Q1-layoff-list".to_string()),
+                password: Some("hunter2".to_string()),
+                burn_after_reading: Some(true),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let body = client.get(&paste.path).send().await?.text().await?;
+
+        assert!(!body.contains("Q1-layoff-list"), "title leaked: {body}");
 
         Ok(())
     }

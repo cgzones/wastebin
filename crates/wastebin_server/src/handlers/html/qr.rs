@@ -33,8 +33,14 @@ pub async fn get(
             uid: owner_uid,
             title,
             expiration,
+            is_encrypted,
             ..
         } = db.get_metadata(key.id).await?;
+
+        // Only the content is encrypted; the title is a plain column, and this view never asks for
+        // a password. `/{id}` withholds it, so showing it here handed anyone with the id the one
+        // thing the password was assumed to cover.
+        let title = (!is_encrypted).then_some(title).flatten();
 
         Ok(Qr {
             page: page.clone(),
@@ -132,6 +138,71 @@ mod tests {
 
         assert!(!body.contains("<img src=x"), "raw markup leaked: {body}");
         assert!(body.contains("&#60;img src=x"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// Only the content is encrypted; the title is a plain column. This view reads metadata and
+    /// never asks for a password, so it handed the title to anyone holding the id — while `/{id}`
+    /// withholds it. People put in titles what they think the password covers.
+    #[tokio::test]
+    async fn an_encrypted_paste_keeps_its_title_back() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            title: Some("Q1-layoff-list".to_string()),
+            password: Some("hunter2".to_string()),
+            ..Default::default()
+        };
+
+        let payload = client
+            .post_json()
+            .json(&entry)
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let body = client
+            .get(&format!("/qr{}", payload.path))
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        assert!(!body.contains("Q1-layoff-list"), "title leaked: {body}");
+
+        Ok(())
+    }
+
+    /// An unencrypted paste has nothing to hide, so its title still shows.
+    #[tokio::test]
+    async fn a_plain_paste_still_shows_its_title() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            title: Some("release-notes".to_string()),
+            ..Default::default()
+        };
+
+        let payload = client
+            .post_json()
+            .json(&entry)
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let body = client
+            .get(&format!("/qr{}", payload.path))
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        assert!(body.contains("release-notes"), "title missing: {body}");
 
         Ok(())
     }
