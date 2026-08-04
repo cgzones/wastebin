@@ -69,36 +69,23 @@ impl fmt::Display for IdUrlPathFormatter<'_> {
 
 impl fmt::Display for Id {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use fmt::Write as _;
+
         match self {
             Self::Id32(n) => {
-                let mut s = String::with_capacity(6);
+                for shift in [26, 20, 14, 8, 2] {
+                    f.write_char(CHAR_TABLE[((n >> shift) & 0x3f) as usize])?;
+                }
 
-                s.push(CHAR_TABLE[((n >> 26) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 20) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 14) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 8) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 2) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[(n & 0x3) as usize]);
-
-                write!(f, "{s}")
+                f.write_char(CHAR_TABLE[(n & 0x3) as usize])
             }
             #[expect(clippy::cast_sign_loss)]
             Self::Id64(n) => {
-                let mut s = String::with_capacity(11);
+                for shift in [58, 52, 46, 40, 34, 28, 22, 16, 10, 4] {
+                    f.write_char(CHAR_TABLE[((n >> shift) & 0x3f) as usize])?;
+                }
 
-                s.push(CHAR_TABLE[((n >> 58) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 52) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 46) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 40) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 34) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 28) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 22) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 16) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 10) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[((n >> 4) & 0x3f) as usize]);
-                s.push(CHAR_TABLE[(n & 0xf) as usize]);
-
-                write!(f, "{s}")
+                f.write_char(CHAR_TABLE[(n & 0xf) as usize])
             }
         }
     }
@@ -115,9 +102,8 @@ impl FromStr for Id {
                 #[expect(clippy::cast_possible_truncation)]
                 let bits: u32 = CHAR_TABLE
                     .iter()
-                    .enumerate()
-                    .find_map(|(bits, c)| (char == *c).then_some(bits as u32))
-                    .ok_or(Error::IllegalCharacters)?;
+                    .position(|c| *c == char)
+                    .ok_or(Error::IllegalCharacters)? as u32;
 
                 if pos < 5 {
                     n = (n << 6) | bits;
@@ -134,9 +120,8 @@ impl FromStr for Id {
                 #[expect(clippy::cast_possible_wrap)]
                 let bits: i64 = CHAR_TABLE
                     .iter()
-                    .enumerate()
-                    .find_map(|(bits, c)| (char == *c).then_some(bits as i64))
-                    .ok_or(Error::IllegalCharacters)?;
+                    .position(|c| *c == char)
+                    .ok_or(Error::IllegalCharacters)? as i64;
 
                 if pos < 10 {
                     n = (n << 6) | bits;
