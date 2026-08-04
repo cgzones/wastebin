@@ -33,8 +33,6 @@ pub enum Error {
     Crypto(#[from] crypto::Error),
     #[error("failed to send command to channel")]
     SendError,
-    #[error("failed to send result")]
-    ResultSendError,
     #[error("failed to send result: {0}")]
     ResultRecvError(#[from] oneshot::error::RecvError),
 }
@@ -65,8 +63,13 @@ macro_rules! metadata_columns {
 }
 
 /// Hand `value` back to the caller that issued the command.
-fn reply<T>(result: oneshot::Sender<T>, value: T) -> Result<(), Error> {
-    result.send(value).map_err(|_| Error::ResultSendError)
+///
+/// A caller that went away before its response arrived — a disconnected client or a request that
+/// hit the timeout — is not a reason to tear down the handler, so the value is simply dropped.
+fn reply<T>(result: oneshot::Sender<T>, value: T) {
+    if result.send(value).is_err() {
+        tracing::debug!("caller went away before receiving its database response");
+    }
 }
 
 /// Parse the leading metadata columns of a row into [`Metadata`] plus whether the entry expired.
@@ -414,17 +417,17 @@ impl Handler {
             };
 
             match command {
-                Command::Insert { entry, result } => reply(result, self.insert(entry))?,
-                Command::Get { id, result } => reply(result, self.get(id))?,
-                Command::GetMetadata { id, result } => reply(result, self.get_metadata(id))?,
-                Command::Delete { id, result } => reply(result, self.delete(id))?,
-                Command::DeleteMany { ids, result } => reply(result, self.delete_many(ids))?,
+                Command::Insert { entry, result } => reply(result, self.insert(entry)),
+                Command::Get { id, result } => reply(result, self.get(id)),
+                Command::GetMetadata { id, result } => reply(result, self.get_metadata(id)),
+                Command::Delete { id, result } => reply(result, self.delete(id)),
+                Command::DeleteMany { ids, result } => reply(result, self.delete_many(ids)),
                 Command::DeleteFor { id, uids, result } => {
-                    reply(result, self.delete_for(id, &uids))?;
+                    reply(result, self.delete_for(id, &uids));
                 }
-                Command::NextUid { result } => reply(result, self.next_uid())?,
-                Command::List { result } => reply(result, self.list())?,
-                Command::Purge { result } => reply(result, self.purge())?,
+                Command::NextUid { result } => reply(result, self.next_uid()),
+                Command::List { result } => reply(result, self.list()),
+                Command::Purge { result } => reply(result, self.purge()),
             }
         }
     }
@@ -762,6 +765,25 @@ mod tests {
 
         assert!(uid1 < uid2);
         assert!(uid2 < uid3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn caller_going_away_keeps_handler_alive() -> Result<(), Box<dyn std::error::Error>> {
+        let db = new_db()?;
+
+        // Enqueue a command whose caller is already gone, so the handler cannot deliver the
+        // response.
+        let (result, command_result) = oneshot::channel();
+        drop(command_result);
+        db.sender
+            .send(Command::NextUid { result })
+            .await
+            .map_err(|_| Error::SendError)?;
+
+        // The handler must keep serving everyone else.
+        assert!(db.next_uid().await.is_ok());
 
         Ok(())
     }
