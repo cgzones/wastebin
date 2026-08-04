@@ -36,7 +36,7 @@ impl Client {
         let (db, handler) =
             Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
                 .expect("open memory database");
-        let cache = Cache::new(NonZeroUsize::new(128).unwrap()).unwrap();
+        let cache = Cache::new(NonZeroUsize::new(128)).unwrap();
         let key = Key::generate();
         let expirations = "0".parse::<ExpirationSet>().unwrap();
         let page = Arc::new(page::Page::new(
