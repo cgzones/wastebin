@@ -240,6 +240,14 @@ credential: whoever holds it can delete every paste created under it.
 To retrieve the raw content, make a GET request on the `/raw/:id` route. In case
 the paste was encrypted, pass the password via the `wastebin-password` header.
 
+> [!NOTE]
+> `burn_after_reading` and the read routes do not combine: `/raw/:id` and
+> `/dl/:id` answer `403 Forbidden` for a paste that burns, and always will.
+> Destroying a paste takes an explicit confirmation, which only the paste's own
+> page can ask for, so a burning paste is readable in a browser only. A request
+> that could destroy it as a side effect — a prefetch, a link preview, a
+> retried `curl` — would burn it for its intended recipient.
+
 To delete a paste, make a DELETE request on the `/:id` route with the `uid`
 cookie set. A browser obtains that cookie by opening `/<id>?owner=<token>` with
 the `owner` token from the insert response: the server validates the token,
