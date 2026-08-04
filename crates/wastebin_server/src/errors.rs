@@ -23,6 +23,8 @@ pub(crate) enum Error {
     MalformedForm,
     #[error("extension names no known syntax")]
     InvalidExtension,
+    #[error("paste has no content")]
+    EmptyPaste,
     #[error("payload exceeded limit")]
     PayloadTooLarge,
     #[error("unsupported media type")]
@@ -62,6 +64,7 @@ impl Error {
             Error::Database(db::Error::NoPassword) => "error.no_password",
             Error::Id(_) | Error::UrlParsing(_) => "error.invalid_id",
             Error::InvalidExtension => "error.invalid_extension",
+            Error::EmptyPaste => "error.empty_paste",
             Error::RateLimit => "error.rate_limit",
             Error::TooLongExpires => "error.too_long_expires",
             Error::MalformedForm => "error.malformed_form",
@@ -116,6 +119,7 @@ impl From<&Error> for StatusCode {
             | Error::Id(_)
             | Error::UrlParsing(_)
             | Error::InvalidExtension
+            | Error::EmptyPaste
             | Error::TooLongExpires
             | Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
                 StatusCode::BAD_REQUEST
