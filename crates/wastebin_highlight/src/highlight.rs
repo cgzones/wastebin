@@ -186,11 +186,7 @@ impl Highlighter {
             .as_deref()
             .filter(|ext| *ext != "txt")
             .and_then(|ext| self.syntax_set.find_syntax_by_extension(ext))
-            .unwrap_or_else(|| {
-                self.syntax_set
-                    .find_syntax_by_extension("txt")
-                    .expect("finding txt syntax")
-            });
+            .unwrap_or_else(|| self.syntax_set.find_syntax_plain_text());
 
         let is_markdown = syntax_ref.name == "Markdown";
         let mut parse_state = ParseState::new(syntax_ref);
