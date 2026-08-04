@@ -1,5 +1,3 @@
-use std::num::TryFromIntError;
-
 use axum::Json;
 use axum::http::StatusCode;
 use serde::Serialize;
@@ -8,10 +6,6 @@ use wastebin_core::{crypto, db, id};
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
-    #[error("axum http error: {0}")]
-    Axum(#[from] axum::http::Error),
-    #[error("integer conversion error: {0}")]
-    IntConversion(#[from] TryFromIntError),
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("highlighting error: {0}")]
@@ -24,7 +18,7 @@ pub(crate) enum Error {
     Database(#[from] db::Error),
     #[error("id error: {0}")]
     Id(#[from] id::Error),
-    #[error("payload too large")]
+    #[error("malformed form data")]
     MalformedForm,
     #[error("rate-limit hit")]
     RateLimit,
@@ -56,9 +50,7 @@ impl From<Error> for StatusCode {
             Error::Join(_)
             | Error::QrCode(_)
             | Error::Database(_)
-            | Error::IntConversion(_)
-            | Error::SyntaxHighlighting(_)
-            | Error::Axum(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            | Error::SyntaxHighlighting(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
     }
 }
