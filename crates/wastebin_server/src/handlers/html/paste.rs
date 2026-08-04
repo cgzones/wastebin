@@ -406,6 +406,42 @@ mod tests {
         Ok(())
     }
 
+    /// The source view reveals the characters that reorder a line, but it reveals them — the
+    /// paste itself is untouched, so `/raw` still answers with the bytes that were stored.
+    #[tokio::test]
+    async fn a_reordering_character_is_shown_but_not_altered()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let text = "let admin = \u{202e}false;";
+
+        let res = client
+            .post_form()
+            .form(&crate::handlers::insert::form::Entry {
+                text: text.to_string(),
+                extension: Some(String::from("rs")),
+                ..Default::default()
+            })
+            .send()
+            .await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        let page = client.get(&location).send().await?.text().await?;
+        assert!(
+            page.contains(r#"data-cp="U+202E""#),
+            "source view did not mark it: {page}"
+        );
+
+        let raw = client
+            .get(&format!("/raw{location}"))
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert_eq!(raw, text, "/raw altered the paste");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn unknown_paste() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;

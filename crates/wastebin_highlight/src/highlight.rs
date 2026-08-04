@@ -103,6 +103,80 @@ pub(crate) fn replace_control_characters(text: &str) -> Cow<'_, str> {
     }
 }
 
+/// Return `true` if `c` changes how the text around it reads without showing a glyph of its own.
+///
+/// These are legitimate in prose — a paste is arbitrary text and they are not removed — but in
+/// source they are how one line is made to read as another: a right-to-left override turns
+/// `if !admin` into something a reviewer reads as its opposite, and a zero-width space hides a
+/// word boundary that is really there.
+///
+/// C0 controls are absent deliberately: `replace_control_characters` has already rewritten those
+/// before any of this is reached.
+fn is_deceptive(c: char) -> bool {
+    matches!(c,
+        // Zero-width and directional marks.
+        '\u{200b}'..='\u{200f}'
+        // Bidi embeddings and overrides.
+        | '\u{202a}'..='\u{202e}'
+        // Bidi isolates.
+        | '\u{2066}'..='\u{2069}'
+        // Deprecated format characters.
+        | '\u{206a}'..='\u{206f}'
+        // Line and paragraph separators, which are not the newline this view splits on.
+        | '\u{2028}' | '\u{2029}'
+        // Interlinear annotation.
+        | '\u{fff9}'..='\u{fffb}'
+        // Zero-width no-break space, also the byte-order mark.
+        | '\u{feff}'
+    )
+}
+
+/// Wrap every deceptive character in `line` so it can be seen, leaving the character itself in
+/// place.
+///
+/// Applied to a line the emitters have already produced, so it covers all of them — syntect's
+/// tokeniser, the Markdown variant, and the escaped-only paths — without forking any. The
+/// character is wrapped rather than replaced: the copy button reads `textContent`, and `/raw`
+/// serves the stored bytes, so neither may see anything but the paste itself. Only text nodes are
+/// touched; a marker written inside an attribute would break out of it.
+fn mark_deceptive_characters(line: &str) -> Cow<'_, str> {
+    // Every one of these is non-ASCII, and this runs over every row the emitters produce as well
+    // as over the whole rendered Markdown document, so let the vectorised scan reject the ordinary
+    // line before anything decodes it.
+    if line.is_ascii() || !line.contains(is_deceptive) {
+        return Cow::Borrowed(line);
+    }
+
+    let mut out = String::with_capacity(line.len() + 64);
+    // The emitters escape every attribute value, so a literal `<` or `>` only ever delimits a tag.
+    let mut in_tag = false;
+
+    for c in line.chars() {
+        match c {
+            '<' => {
+                in_tag = true;
+                out.push(c);
+            }
+            '>' => {
+                in_tag = false;
+                out.push(c);
+            }
+            c if !in_tag && is_deceptive(c) => {
+                // The code point is this crate's own text, not the paste's, so it needs no
+                // escaping; the character itself is not markup-significant either.
+                let _ = write!(
+                    out,
+                    r#"<span class="uc" data-cp="U+{:04X}">{c}</span>"#,
+                    c as u32
+                );
+            }
+            c => out.push(c),
+        }
+    }
+
+    Cow::Owned(out)
+}
+
 fn escape(s: &str, buf: &mut String) {
     // Because the internet is always right, turns out there's not that many
     // characters to escape: http://stackoverflow.com/questions/7381974
@@ -369,6 +443,10 @@ impl Highlighter {
                 }
             };
 
+            // After the emitters, so every one of them is covered, and before the span balance is
+            // measured below — the wrappers are balanced pairs, so they do not disturb it.
+            let formatted = mark_deceptive_characters(&formatted);
+
             let line_number = line_idx + 1;
             let _ = write!(html, r#"<div id="LC{line_number}">"#);
 
@@ -557,6 +635,123 @@ mod tests {
             ),
             "an enormous render was produced anyway"
         );
+    }
+
+    /// Strip markup, leaving what a reader would select and what `copy()` reads back.
+    fn text_of(html: &str) -> String {
+        let mut out = String::new();
+        let mut in_tag = false;
+        for c in html.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => out.push(c),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// A right-to-left override reorders what follows it, so the line a reviewer reads is not the
+    /// line that runs — the Trojan Source problem. Marking it leaves the byte in place while
+    /// making it visible, on every path that emits a row.
+    #[test]
+    fn a_reordering_character_is_marked() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+
+        for (ext, label) in [
+            (Some("rs".to_string()), "syntect emitter"),
+            (Some("md".to_string()), "markdown emitter"),
+            (Some("zzz-not-a-syntax".to_string()), "plain text"),
+        ] {
+            let html = highlighter
+                .highlight("let admin = \u{202e}false;\n".to_string(), ext)?
+                .into_inner();
+
+            assert!(
+                html.contains(r#"data-cp="U+202E""#),
+                "{label}: not marked: {html}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The marker is an attribute and a wrapper, never text: `copy()` reads `textContent`, so
+    /// anything added there would ride along into the clipboard and corrupt what was pasted.
+    #[test]
+    fn marking_does_not_change_the_text() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        let source = "let admin = \u{202e}false;\n";
+
+        let html = highlighter
+            .highlight(source.to_string(), Some("rs".into()))?
+            .into_inner();
+
+        assert_eq!(
+            text_of(&html).trim_start_matches(|c: char| c.is_ascii_digit()),
+            source.trim_end()
+        );
+
+        Ok(())
+    }
+
+    /// The line the marker sits in is one row of a gutter that is numbered separately, so the
+    /// wrapper must not introduce a line of its own.
+    #[test]
+    fn marking_does_not_add_a_row() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+
+        let html = highlighter
+            .highlight("one\ntw\u{202e}o\nthree\n".to_string(), Some("rs".into()))?
+            .into_inner();
+
+        assert!(html.contains(r#"data-cp="U+202E""#), "not marked: {html}");
+        assert!(html.contains(r#"id="LC3""#), "third row missing");
+        assert!(!html.contains(r#"id="LC4""#), "gained a row: {html}");
+
+        Ok(())
+    }
+
+    /// The Markdown emitter puts a link target into an `href`, and a marker written inside an
+    /// attribute would break out of it. Only text nodes may be touched.
+    #[test]
+    fn a_link_target_is_not_marked_inside_its_attribute() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let highlighter = Highlighter::default();
+
+        let html = highlighter
+            .highlight(
+                "[click](https://example.com/\u{202e}gnp.exe)\n".to_string(),
+                Some("md".into()),
+            )?
+            .into_inner();
+
+        // The gutter emits `href="#L1"` for every row before any paste content does, so anchor
+        // on the link's own target rather than on the first `href` in the document.
+        let href_start = html.find("href=\"https").expect("link anchor");
+        let href_end = href_start + html[href_start..].find('>').expect("tag end");
+        let href = &html[href_start..href_end];
+
+        assert!(
+            !href.contains("<span"),
+            "marker written into the attribute: {href}"
+        );
+        // The character is still there, unaltered, in the target the anchor points at.
+        assert!(href.contains('\u{202e}'), "target was rewritten: {href}");
+
+        Ok(())
+    }
+
+    /// A paste with none of these characters must render exactly as it did before marking existed.
+    #[test]
+    fn ordinary_markup_is_untouched() {
+        let line = r#"<span class="source rust">fn main() {}</span>"#;
+
+        assert!(matches!(
+            mark_deceptive_characters(line),
+            std::borrow::Cow::Borrowed(_)
+        ));
     }
 
     /// The bound must not be reachable by anything a person would actually paste.

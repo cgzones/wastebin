@@ -687,6 +687,31 @@ table {
   padding: 0 16px;
 }
 
+/* revealed characters that reorder or hide what is around them */
+
+.uc {
+  /* Confines the character's effect to this span, so an override cannot reorder the rest of the
+     line. The character itself stays in the document: the copy button reads `textContent`. */
+  unicode-bidi: isolate;
+}
+
+.uc::after {
+  content: attr(data-cp);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 3px;
+  padding: 0 3px;
+  margin: 0 1px;
+  /* The badge is an annotation, not content — it must not be selectable, or it would land in a
+     selection copied by hand. The copy button is unaffected either way. */
+  user-select: none;
+  vertical-align: baseline;
+  white-space: nowrap;
+}
+
 /* line number links in paste view */
 
 .source-view #line-numbers a,
