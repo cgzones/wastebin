@@ -112,6 +112,20 @@ fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, boo
     ))
 }
 
+/// Column index of the nonce in the full-entry query, i.e. the first one after
+/// [`metadata_columns!`] and the data blob.
+const NONCE_COLUMN: usize = 7;
+/// Column index of the per-entry salt in the full-entry query.
+const SALT_COLUMN: usize = 8;
+
+/// Report a blob column that held something the domain type would not accept.
+fn blob_error(
+    column: usize,
+    err: impl std::error::Error + Send + Sync + 'static,
+) -> rusqlite::Error {
+    rusqlite::Error::FromSqlConversionFailure(column, rusqlite::types::Type::Blob, Box::new(err))
+}
+
 /// Commands issued to the database handler and corresponding to [`Database`] calls.
 enum Command {
     Insert {
@@ -350,11 +364,6 @@ pub mod read {
             password: Option<Password>,
             legacy_salt: &Salt,
         ) -> Result<CompressedReadEntry, Error> {
-            let derivation = match self.salt {
-                Some(salt) => Derivation::PerEntry(salt),
-                None => Derivation::Legacy(legacy_salt.clone()),
-            };
-
             match (self.nonce, password) {
                 (Some(_), None) => Err(Error::NoPassword),
                 (None, None | Some(_)) => Ok(CompressedReadEntry {
@@ -362,6 +371,10 @@ pub mod read {
                     metadata: self.metadata,
                 }),
                 (Some(nonce), Some(password)) => {
+                    let derivation = match self.salt {
+                        Some(salt) => Derivation::PerEntry(salt),
+                        None => Derivation::Legacy(legacy_salt.clone()),
+                    };
                     let encrypted = Encrypted::new(self.data, nonce);
                     // A failing AEAD check means the supplied password was wrong; surface that as
                     // an outcome rather than leaking a cipher primitive failure to callers.
@@ -426,7 +439,9 @@ impl Handler {
                 // sqlite creates the file 0644, so on a shared host every local account could read
                 // every unencrypted paste on the instance. Only a file this process just created
                 // is tightened; an existing one keeps whatever the operator chose for it.
+                #[cfg(unix)]
                 let is_new = !path.exists();
+
                 let conn = Connection::open(&path)?;
 
                 #[cfg(unix)]
@@ -439,9 +454,6 @@ impl Handler {
                         tracing::warn!("could not restrict database file permissions: {err}");
                     }
                 }
-
-                #[cfg(not(unix))]
-                let _ = is_new;
 
                 conn
             }
@@ -615,28 +627,16 @@ impl Handler {
                 let (metadata, expired) = metadata_from_row(row)?;
 
                 let nonce = row
-                    .get::<_, Option<Vec<_>>>(7)?
+                    .get::<_, Option<Vec<_>>>(NONCE_COLUMN)?
                     .map(|v| XNonce::try_from(v.as_slice()))
                     .transpose()
-                    .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            7,
-                            rusqlite::types::Type::Blob,
-                            Box::new(err),
-                        )
-                    })?;
+                    .map_err(|err| blob_error(NONCE_COLUMN, err))?;
 
                 let salt = row
-                    .get::<_, Option<Vec<u8>>>(8)?
+                    .get::<_, Option<Vec<u8>>>(SALT_COLUMN)?
                     .map(EntrySalt::try_from)
                     .transpose()
-                    .map_err(|err| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            8,
-                            rusqlite::types::Type::Blob,
-                            Box::new(err),
-                        )
-                    })?;
+                    .map_err(|err| blob_error(SALT_COLUMN, err))?;
 
                 Ok((
                     read::DatabaseEntry {
@@ -672,8 +672,12 @@ impl Handler {
 
         let mut affected = 0;
 
-        for id in ids {
-            affected += tx.execute("DELETE FROM entries WHERE id=?1", params![id.to_i64()])?;
+        {
+            let mut stmt = tx.prepare("DELETE FROM entries WHERE id=?1")?;
+
+            for id in ids {
+                affected += stmt.execute(params![id.to_i64()])?;
+            }
         }
 
         tx.commit()?;
