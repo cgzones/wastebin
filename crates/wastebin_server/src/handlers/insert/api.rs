@@ -92,6 +92,50 @@ mod tests {
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
 
+    /// The extension guard lives in `common_insert`, which both routes share — but only the form
+    /// route is covered for it, and the JSON route is the one a script drives.
+    #[tokio::test]
+    async fn unknown_extension_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for extension in [
+            "zzzznope",
+            "../../admin",
+            "a/b",
+            "a\r\nX-Injected: yes",
+            // Nothing bounded the length either, and the value comes back as a path segment on
+            // every later request to that paste.
+            &"a".repeat(100_000),
+        ] {
+            let entry = Entry {
+                text: "FooBarBaz".to_string(),
+                extension: Some(extension.to_string()),
+                ..Default::default()
+            };
+
+            let res = client.post_json().json(&entry).send().await?;
+
+            assert_eq!(
+                res.status(),
+                StatusCode::BAD_REQUEST,
+                "extension {extension:.40?} was not rejected"
+            );
+            // A rejection has to arrive as the API's own error shape. Interpolating the value into
+            // a `Location` first meant an inserted paste was answered with a bare 500 whose body
+            // was neither JSON nor a page — and whose id was never returned to anyone.
+            assert!(
+                res.headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|value| value.to_str().ok())
+                    .is_some_and(|value| value.starts_with("application/json")),
+                "extension {extension:.40?} answered with {:?}",
+                res.headers().get(reqwest::header::CONTENT_TYPE)
+            );
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn insert() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
