@@ -1,0 +1,31 @@
+[package]
+name = "wastebin-highlight-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+wastebin_highlight = { path = "../crates/wastebin_highlight" }
+
+[[bin]]
+name = "highlight"
+path = "fuzz_targets/highlight.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "markdown"
+path = "fuzz_targets/markdown.rs"
+test = false
+doc = false
+bench = false
+
+# Its own workspace: cargo-fuzz needs nightly and builds with sanitizers, neither of which the
+# main workspace's stable toolchain and lint policy should have to accommodate.
+[workspace]
