@@ -73,36 +73,36 @@ pub async fn get(
             .into_response());
         }
 
-        let (data, is_available, encrypted) = match db.get(key.id, password).await {
-            Ok(Entry::Regular(data)) => (data, true, false),
-            Ok(Entry::Burned(data)) => (data, false, false),
-            Ok(Entry::Encrypted(data)) => {
-                let is_available = !data.metadata.must_be_deleted;
-                (data, is_available, true)
-            }
-            Err(db::Error::NoPassword) => {
-                return Ok(password_input(
-                    &page,
-                    theme,
-                    lang,
-                    FormAction::rendered(&key),
-                ));
-            }
-            Err(err) => return Err(err.into()),
-        };
+        // A cached render implies the paste was available and unencrypted when stored, so its
+        // metadata is all that is still needed — reading the body back would only waste a
+        // decompression of bytes we immediately drop.
+        let cached = no_password
+            .then(|| cache.get(&key, Mode::Rendered))
+            .flatten();
 
-        let Data { text, metadata } = data;
-        let Metadata {
-            uid: owner_uid,
-            title,
-            expiration,
-            ..
-        } = metadata;
-
-        let html = if let Some(cached) = cache.get(&key, Mode::Rendered) {
+        let (html, is_available, encrypted, metadata) = if let Some(cached) = cached {
             tracing::trace!(?key, "found cached rendered markdown");
-            cached
+            (cached, true, false, metadata)
         } else {
+            let (data, is_available, encrypted) = match db.get(key.id, password).await {
+                Ok(Entry::Regular(data)) => (data, true, false),
+                Ok(Entry::Burned(data)) => (data, false, false),
+                Ok(Entry::Encrypted(data)) => {
+                    let is_available = !data.metadata.must_be_deleted;
+                    (data, is_available, true)
+                }
+                Err(db::Error::NoPassword) => {
+                    return Ok(password_input(
+                        &page,
+                        theme,
+                        lang,
+                        FormAction::rendered(&key),
+                    ));
+                }
+                Err(err) => return Err(err.into()),
+            };
+
+            let Data { text, metadata } = data;
             let highlighter = highlighter.clone();
             let rendered: Arc<str> =
                 tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
@@ -115,8 +115,15 @@ pub async fn get(
                 cache.put(&key, Mode::Rendered, Arc::clone(&rendered));
             }
 
-            rendered
+            (rendered, is_available, encrypted, metadata)
         };
+
+        let Metadata {
+            uid: owner_uid,
+            title,
+            expiration,
+            ..
+        } = metadata;
 
         let rendered = Rendered {
             page: page.clone(),
@@ -322,6 +329,49 @@ mod tests {
         let body = res.text().await?;
         assert!(body.contains("<h1>secret</h1>"), "body: {body}");
         assert_eq!(cache_control.unwrap(), "no-store");
+
+        Ok(())
+    }
+
+    /// The rendered view caches under its own mode, so it must also decide availability from the
+    /// database rather than from a cache hit.
+    #[tokio::test]
+    async fn deleted_paste_is_not_served_from_cache() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+        let data = Entry {
+            text: String::from("# cache-me-then-delete"),
+            extension: Some(String::from("md")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let rendered = format!("/md{location}");
+
+        // The first render fills the cache, the second is served from it.
+        for _ in 0..2 {
+            let res = client
+                .get(&rendered)
+                .header(header::ACCEPT, "text/html; charset=utf-8")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::OK);
+            assert!(res.text().await?.contains("cache-me-then-delete"));
+        }
+
+        // Deletion goes through the bare id, without the extension the URL carries.
+        let id = location.trim_start_matches('/');
+        let id = id.split('.').next().unwrap();
+
+        let res = client.delete(&format!("/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = client
+            .get(&rendered)
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
     }
