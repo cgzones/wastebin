@@ -90,7 +90,10 @@ fn nesting_depth(html: &str) -> usize {
         // Only a void element closes itself. HTML5 discards a trailing slash on anything else, so
         // `<div/>` opens a level however it is spelled — counting it as self-closing let a paste
         // report depth 0 and still build the tree the limit is here to refuse.
-        if VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) {
+        if VOID_ELEMENTS
+            .iter()
+            .any(|void| name.eq_ignore_ascii_case(void))
+        {
             continue;
         }
 
