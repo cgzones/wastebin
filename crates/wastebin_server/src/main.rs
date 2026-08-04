@@ -217,11 +217,39 @@ async fn handle_service_errors(
     let asked_options = req.method() == http::Method::OPTIONS;
     let response = next.run(req).await;
 
-    let error = match response.status() {
-        StatusCode::PAYLOAD_TOO_LARGE => Error::PayloadTooLarge,
-        StatusCode::UNSUPPORTED_MEDIA_TYPE => Error::UnsupportedMediaType,
-        StatusCode::METHOD_NOT_ALLOWED if !asked_options => Error::MethodNotAllowed,
-        _ => return response,
+    // An extractor answers a request it could not parse itself, in plain text, quoting the parser
+    // — the field names of the handler's own type and where in the input it gave up. Every error
+    // this crate raises is rendered instead, so a `text/plain` body at one of these statuses is
+    // one of those rejections rather than an answer a handler built.
+    let is_rejection = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|content_type| content_type.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with("text/plain"));
+
+    let status = response.status();
+
+    // A 405 is the router's answer, not an extractor's, so it is recognised by status alone.
+    let error = if status == StatusCode::METHOD_NOT_ALLOWED {
+        if asked_options {
+            return response;
+        }
+
+        Error::MethodNotAllowed
+    } else {
+        // 413 and 415 describe the request whatever produced them, so they are rewritten on
+        // sight; 422 and 400 are only ours to reinterpret when a rejection is what produced them.
+        let ours = is_rejection
+            || matches!(
+                status,
+                StatusCode::PAYLOAD_TOO_LARGE | StatusCode::UNSUPPORTED_MEDIA_TYPE
+            );
+
+        let Some(error) = ours.then(|| errors::rejection_error(status)).flatten() else {
+            return response;
+        };
+
+        error
     };
 
     // The `Allow` a 405 is required to carry is not on `response` yet: axum attaches it as the
@@ -576,6 +604,38 @@ mod tests {
                 "408 is missing {header}",
             );
         }
+
+        Ok(())
+    }
+
+    /// An extractor answers a body it cannot parse itself, in plain text, quoting the parser: the
+    /// field names of the internal type and where in the input it gave up. That is exactly the
+    /// detail `Error::message_key` exists to keep out of a response, and it went out unlocalised
+    /// and outside the JSON envelope besides.
+    #[tokio::test]
+    async fn an_extractor_rejection_is_answered_like_any_other_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .post_json()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::ACCEPT, "application/json")
+            .body(r#"{"text":"AAA","text":"BBB"}"#)
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = res.text().await?;
+        assert!(
+            !body.contains("Failed to deserialize") && !body.contains("duplicate field"),
+            "parser detail reached the client: {body}"
+        );
+        assert!(
+            body.starts_with(r#"{"message":"#),
+            "not the JSON envelope: {body}"
+        );
 
         Ok(())
     }

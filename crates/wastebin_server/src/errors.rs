@@ -21,6 +21,9 @@ pub(crate) enum Error {
     Id(#[from] id::Error),
     #[error("malformed form data")]
     MalformedForm,
+    /// A request an extractor could not parse into the handler's own type.
+    #[error("malformed request")]
+    MalformedRequest,
     #[error("extension names no known syntax")]
     InvalidExtension,
     #[error("paste has no content")]
@@ -78,6 +81,7 @@ impl Error {
             Error::TooLongExpires => "error.too_long_expires",
             Error::QrCode(_) => "error.qr_too_long",
             Error::MalformedForm => "error.malformed_form",
+            Error::MalformedRequest => "error.malformed_request",
             Error::BurnNotConfirmed => "error.burn_not_confirmed",
             Error::PayloadTooLarge => "error.payload_too_large",
             Error::UnsupportedMediaType => "error.unsupported_media_type",
@@ -115,6 +119,23 @@ pub(crate) struct JsonError {
 /// Response carrying a status code and the error message as JSON.
 pub(crate) type JsonErrorResponse = (StatusCode, Json<JsonError>);
 
+/// Classify an extractor rejection by the status it answers with.
+///
+/// The form route consumes its own `FormRejection`, while every other rejection reaches
+/// `handle_service_errors` as a finished response — so both go through this instead of keeping a
+/// table each. They had already drifted: the form route reported an unsupported content type as a
+/// malformed form.
+#[must_use]
+pub(crate) fn rejection_error(status: StatusCode) -> Option<Error> {
+    match status {
+        StatusCode::PAYLOAD_TOO_LARGE => Some(Error::PayloadTooLarge),
+        StatusCode::UNSUPPORTED_MEDIA_TYPE => Some(Error::UnsupportedMediaType),
+        StatusCode::UNPROCESSABLE_ENTITY => Some(Error::MalformedForm),
+        StatusCode::BAD_REQUEST => Some(Error::MalformedRequest),
+        _ => None,
+    }
+}
+
 impl From<Error> for StatusCode {
     fn from(err: Error) -> Self {
         Self::from(&err)
@@ -139,7 +160,8 @@ impl From<&Error> for StatusCode {
                 wastebin_highlight::Error::TooDeeplyNested(_)
                 | wastebin_highlight::Error::TooLarge(_),
             )
-            | Error::BurnRenderTooLarge => StatusCode::BAD_REQUEST,
+            | Error::BurnRenderTooLarge
+            | Error::MalformedRequest => StatusCode::BAD_REQUEST,
             Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
             Error::QrCode(_) => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
