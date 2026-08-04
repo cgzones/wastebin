@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- A `WASTEBIN_PASSWORD_SALT` holding non-Unicode data is reported at startup
+  instead of silently falling back to the default salt, which would have made
+  every entry stored under the operator's salt undecryptable.
+
 
 ## 3.7.1
 

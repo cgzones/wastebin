@@ -1,4 +1,15 @@
+use std::env::VarError;
+
 use crate::crypto;
+use crate::env::vars::PASSWORD_SALT;
+
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    #[error("{0} is set but contains non-Unicode data")]
+    NotUnicode(&'static str),
+    #[error("failed to parse {PASSWORD_SALT}: {0}")]
+    Salt(#[from] crypto::Error),
+}
 
 /// Names of environment variables.
 pub mod vars {
@@ -34,21 +45,37 @@ pub mod vars {
     pub const RATELIMIT_DELETE: &str = "WASTEBIN_RATELIMIT_DELETE";
 }
 
+/// Read `name` from the environment.
+///
+/// A variable that is set but holds non-Unicode data is reported rather than silently treated as
+/// unset, which would fall back to the default and quietly drop the operator's configuration.
+pub fn var(name: &'static str) -> Result<Option<String>, Error> {
+    match std::env::var(name) {
+        Ok(value) => Ok(Some(value)),
+        Err(VarError::NotPresent) => Ok(None),
+        Err(VarError::NotUnicode(_)) => Err(Error::NotUnicode(name)),
+    }
+}
+
 /// Read the argon2 salt from the environment, falling back to a fixed default.
 ///
 /// Call once at startup and pass the result to [`crate::db::Database::new`], so the value is
 /// fixed for the process rather than read lazily on the first encrypted paste. A salt shorter
 /// than [`crypto::MIN_SALT_LEN`] is rejected here, since argon2 would otherwise reject it on
 /// every encrypted paste at runtime.
-pub fn password_hash_salt() -> Result<crypto::Salt, crypto::Error> {
-    std::env::var(vars::PASSWORD_SALT)
-        .unwrap_or_else(|_| {
-            tracing::info!(
-                "Using default salt for encryption. Consider setting `{}`.",
-                vars::PASSWORD_SALT
-            );
+///
+/// Reading through [`var`] rather than falling back on any error matters more here than for the
+/// other variables: silently substituting the default salt for one this process cannot read makes
+/// every entry stored under the operator's salt permanently undecryptable.
+pub fn password_hash_salt() -> Result<crypto::Salt, Error> {
+    let salt = var(vars::PASSWORD_SALT)?.unwrap_or_else(|| {
+        tracing::info!(
+            "Using default salt for encryption. Consider setting `{}`.",
+            vars::PASSWORD_SALT
+        );
 
-            "somesalt".to_string()
-        })
-        .try_into()
+        "somesalt".to_string()
+    });
+
+    Ok(salt.try_into()?)
 }

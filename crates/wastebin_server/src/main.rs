@@ -231,7 +231,7 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     let timeout = env::http_timeout()?;
     let expirations = env::expiration_set()?;
     let theme = env::theme()?;
-    let title = env::title();
+    let title = env::title()?;
     let ratelimit_insert = env::ratelimit_insert()?;
     let ratelimit_delete = env::ratelimit_delete()?;
     let max_expiration = env::max_expiration()?;
