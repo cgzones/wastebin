@@ -120,7 +120,18 @@ pub fn database_method() -> Result<db::Open, Error> {
 
 pub fn signing_key() -> Result<Key, Error> {
     var(vars::SIGNING_KEY)?.map_or_else(
-        || Ok(Key::generate()),
+        || {
+            // Louder than the salt's note, because the cost lands on visitors rather than on the
+            // operator: a fresh key invalidates every `uid` cookie and every outstanding `owner`
+            // token, so each restart silently strips paste creators of the ability to delete what
+            // they made. A process that is restarting in a loop does that over and over.
+            tracing::warn!(
+                "No `{}` set, generating a random one. Cookies do not survive a restart and paste creators lose the ability to delete their pastes.",
+                vars::SIGNING_KEY
+            );
+
+            Ok(Key::generate())
+        },
         |value| Key::try_from(value.as_bytes()).map_err(|err| Error::SigningKey(err.to_string())),
     )
 }
