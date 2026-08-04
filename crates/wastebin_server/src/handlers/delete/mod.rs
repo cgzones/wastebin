@@ -1,17 +1,18 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use wastebin_core::db;
 use wastebin_core::id::Id;
 
 use crate::AppState;
 use crate::Error;
-use crate::Error::RateLimit;
-use crate::handlers::{RATELIMIT_LOG_INTERVAL, START};
+use crate::handlers::check_ratelimit;
 
 pub mod api;
 pub mod form;
 
 async fn common_delete(appstate: &AppState, id: Id, uids: &[i64]) -> Result<(), Error> {
+    static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
+
     // Cheap ownership pre-check so bogus ids cannot drain the rate limiter before the
     // authoritative, atomic check in `delete_for` below.
     let metadata = match appstate.db.get_metadata(id).await {
@@ -24,29 +25,11 @@ async fn common_delete(appstate: &AppState, id: Id, uids: &[i64]) -> Result<(), 
         return Err(db::Error::Delete.into());
     }
 
-    if let Some(ref ratelimiter) = appstate.ratelimit_delete {
-        /// Next second since `START` at which logging is allowed again.
-        static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
-
-        if ratelimiter.try_wait().is_err() {
-            let now = START.elapsed().as_secs();
-            let deadline = RL_LOGGED.load(Ordering::Relaxed);
-            if now >= deadline
-                && RL_LOGGED
-                    .compare_exchange(
-                        deadline,
-                        now.saturating_add(RATELIMIT_LOG_INTERVAL),
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    )
-                    .is_ok()
-            {
-                tracing::info!("Rate limiting paste deletions");
-            }
-
-            Err(RateLimit)?;
-        }
-    }
+    check_ratelimit(
+        appstate.ratelimit_delete.as_deref(),
+        &RL_LOGGED,
+        "paste deletions",
+    )?;
 
     appstate.db.delete_for(id, uids).await?;
 

@@ -8,14 +8,18 @@ pub mod robots;
 pub mod theme;
 
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use axum_extra::extract::cookie::{Cookie, SameSite};
+use ratelimit::Ratelimiter;
 
-pub(crate) static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+use crate::Error;
+
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
 
 /// Minimum number of seconds between two rate-limiting log messages.
-pub(crate) const RATELIMIT_LOG_INTERVAL: u64 = 60;
+const RATELIMIT_LOG_INTERVAL: u64 = 60;
 
 /// Build a cookie with secure defaults: `HttpOnly`, `SameSite=Strict`, `Path=/`.
 pub(crate) fn cookie(name: &str, value: String) -> Cookie<'static> {
@@ -24,4 +28,38 @@ pub(crate) fn cookie(name: &str, value: String) -> Cookie<'static> {
     cookie.set_same_site(SameSite::Strict);
     cookie.set_path("/");
     cookie
+}
+
+/// Take a token from `limiter`, logging `what` at most once per minute.
+///
+/// `logged` holds the next second (since `START`) at which logging is allowed again.
+pub(crate) fn check_ratelimit(
+    limiter: Option<&Ratelimiter>,
+    logged: &AtomicU64,
+    what: &str,
+) -> Result<(), Error> {
+    let Some(limiter) = limiter else {
+        return Ok(());
+    };
+
+    if limiter.try_wait().is_err() {
+        let now = START.elapsed().as_secs();
+        let deadline = logged.load(Ordering::Relaxed);
+        if now >= deadline
+            && logged
+                .compare_exchange(
+                    deadline,
+                    now.saturating_add(RATELIMIT_LOG_INTERVAL),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+        {
+            tracing::info!("Rate limiting {what}");
+        }
+
+        return Err(Error::RateLimit);
+    }
+
+    Ok(())
 }

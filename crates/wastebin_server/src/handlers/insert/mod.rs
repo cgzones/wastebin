@@ -1,11 +1,11 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 
 use wastebin_core::{db::write, id::Id};
 
 use crate::AppState;
 use crate::Error;
-use crate::Error::{RateLimit, TooLongExpires};
-use crate::handlers::{RATELIMIT_LOG_INTERVAL, START};
+use crate::Error::TooLongExpires;
+use crate::handlers::check_ratelimit;
 
 pub mod api;
 pub mod form;
@@ -14,35 +14,19 @@ async fn common_insert(
     appstate: &AppState,
     entry: write::Entry,
 ) -> Result<(Id, write::Entry), Error> {
+    static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
+
     if let Some(max_expiration) = appstate.page.max_expiration
         && entry.expires.is_none_or(|exp| exp > max_expiration)
     {
-        Err(TooLongExpires)?;
+        return Err(TooLongExpires);
     }
 
-    if let Some(ref ratelimiter) = appstate.ratelimit_insert {
-        /// Next second since `START` at which logging is allowed again.
-        static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
-
-        if ratelimiter.try_wait().is_err() {
-            let now = START.elapsed().as_secs();
-            let deadline = RL_LOGGED.load(Ordering::Relaxed);
-            if now >= deadline
-                && RL_LOGGED
-                    .compare_exchange(
-                        deadline,
-                        now.saturating_add(RATELIMIT_LOG_INTERVAL),
-                        Ordering::Relaxed,
-                        Ordering::Relaxed,
-                    )
-                    .is_ok()
-            {
-                tracing::info!("Rate limiting paste insertions");
-            }
-
-            Err(RateLimit)?;
-        }
-    }
+    check_ratelimit(
+        appstate.ratelimit_insert.as_deref(),
+        &RL_LOGGED,
+        "paste insertions",
+    )?;
 
     let res = appstate.db.insert(entry).await?;
 
