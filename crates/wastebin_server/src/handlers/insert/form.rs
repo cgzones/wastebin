@@ -382,7 +382,10 @@ mod tests {
         assert!(cookie.value().len() > 40);
         assert_eq!(cookie.path().unwrap(), "/");
         assert!(cookie.http_only());
-        assert!(cookie.same_site_strict());
+        // Lax, not Strict: a handoff link is a cross-site navigation, and Strict withheld the
+        // cookie on exactly that request — so the claim overwrote the identity instead of joining
+        // it. Cross-site POSTs and subresource loads still do not carry it.
+        assert!(cookie.same_site_lax());
         assert!(cookie.domain().is_none());
         assert!(cookie.expires().is_none());
         assert!(cookie.max_age().is_none());

@@ -80,7 +80,11 @@ pub async fn get(
     let db = &appstate.db;
     let highlighter = &appstate.highlighter;
 
-    if let Some(token) = handoff.owner.as_deref()
+    // A handoff is a link someone opens, so it only ever arrives as a navigation. Honouring it on
+    // a POST as well let an attacker page auto-submit a hidden form — no preflight, and this route
+    // has no `Origin` check — and rewrite the visitor's cookie behind their back.
+    if method == http::Method::GET
+        && let Some(token) = handoff.owner.as_deref()
         && let Some(claimed_uid) = verify_owner_token(&cookie_key, token)
     {
         let mut new_uids = uids
@@ -243,6 +247,74 @@ mod tests {
             let res = client.get(path).send().await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "path {path}");
         }
+
+        Ok(())
+    }
+
+    /// A handoff is a link someone opens, which is a GET. Accepting one on POST let an attacker
+    /// page auto-submit a hidden form and rewrite the visitor's cookie without a preflight — and
+    /// `/{id}` carries no `Origin` check to stop it.
+    #[tokio::test]
+    async fn handoff_is_ignored_on_a_post() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let attacker = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: "attacker paste".to_string(),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let res = client
+            .post(&attacker.path)
+            .query(&[("owner", &attacker.owner)])
+            .header("origin", "https://evil.example.com")
+            .send()
+            .await?;
+
+        assert_ne!(res.status(), StatusCode::SEE_OTHER);
+        assert!(
+            res.headers()
+                .get_all("set-cookie")
+                .iter()
+                .filter_map(|value| value.to_str().ok())
+                .all(|value| !value.starts_with("uid=")),
+            "a POST claimed an identity: {:?}",
+            res.headers()
+        );
+
+        Ok(())
+    }
+
+    /// `SameSite=Strict` withholds the cookie on the very navigation a handoff link is, so the
+    /// server saw no identity, minted a fresh one and `Set-Cookie`d it over the visitor's real
+    /// one — costing them the right to delete everything they had made. `Lax` is what lets a
+    /// top-level navigation carry the identity it is supposed to be added to.
+    #[tokio::test]
+    async fn the_uid_cookie_survives_a_handoff_navigation() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .post_form()
+            .form(&crate::test_helpers::some_entry())
+            .send()
+            .await?;
+        let cookie = res
+            .headers()
+            .get("set-cookie")
+            .expect("insert mints a uid")
+            .to_str()?
+            .to_owned();
+
+        assert!(
+            cookie.to_lowercase().contains("samesite=lax"),
+            "uid cookie: {cookie}"
+        );
 
         Ok(())
     }
