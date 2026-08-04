@@ -85,12 +85,10 @@ fn nesting_depth(html: &str) -> usize {
             continue;
         }
 
-        let self_closing = fragment[name.len()..]
-            .split('>')
-            .next()
-            .is_some_and(|attrs| attrs.trim_end().ends_with('/'));
-
-        if self_closing || VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) {
+        // Only a void element closes itself. HTML5 discards a trailing slash on anything else, so
+        // `<div/>` opens a level however it is spelled — counting it as self-closing let a paste
+        // report depth 0 and still build the tree the limit is here to refuse.
+        if VOID_ELEMENTS.contains(&name.to_ascii_lowercase().as_str()) {
             continue;
         }
 
@@ -346,6 +344,16 @@ mod tests {
         assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
     }
 
+    /// HTML5 ignores a trailing slash on anything but a void element, so `<div/>` opens a level
+    /// just like `<div>`. Honouring the slash on any tag let a paste declare itself flat and hand
+    /// the sanitizer the deep tree the limit exists to refuse.
+    #[test]
+    fn a_slash_does_not_close_a_non_void_element() {
+        let md = "<div/>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
     #[test]
     fn nesting_within_the_limit_still_renders() -> Result<(), Box<dyn std::error::Error>> {
         let md = "<div>".repeat(32);
@@ -371,7 +379,8 @@ mod tests {
         assert_eq!(nesting_depth("<p>a</p><p>b</p>"), 1);
         assert_eq!(nesting_depth("<br><br><br>"), 0);
         assert_eq!(nesting_depth("<img src=\"x\"/>"), 0);
-        assert_eq!(nesting_depth("<div/><div/>"), 0);
+        // A slash cannot close a `div`, so these nest rather than sit side by side.
+        assert_eq!(nesting_depth("<div/><div/>"), 2);
         // Text containing a bare `<` must not be read as markup.
         assert_eq!(nesting_depth("1 < 2"), 0);
     }
