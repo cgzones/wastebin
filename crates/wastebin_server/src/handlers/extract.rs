@@ -10,7 +10,6 @@ use axum::response::Redirect;
 use axum_extra::extract::cookie::Key;
 use axum_extra::extract::{CookieJar, SignedCookieJar};
 use cookie::Cookie;
-use http::StatusCode;
 use serde::Deserialize;
 
 use wastebin_core::crypto;
@@ -188,27 +187,9 @@ pub(crate) fn verify_owner_token(key: &Key, token: &str) -> Option<i64> {
         .and_then(|uid| uid.parse::<i64>().ok())
 }
 
-impl<S> FromRequestParts<S> for Uids
-where
-    S: Send + Sync,
-    Key: FromRef<S>,
-{
-    type Rejection = StatusCode;
-
-    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let jar = SignedCookieJar::<crate::Key>::from_request_parts(parts, state)
-            .await
-            .map_err(|_| StatusCode::FORBIDDEN)?;
-
-        let uids = jar
-            .get("uid")
-            .map(|cookie| parse_uids(cookie.value_trimmed()))
-            .ok_or(StatusCode::FORBIDDEN)?;
-
-        Ok(Uids(uids))
-    }
-}
-
+/// Only the optional form exists: a request without the cookie is ordinary, not a failure, and
+/// every consumer takes `Option<Uids>`. A mandatory impl would carry a rejection no response path
+/// ever renders.
 impl<S> OptionalFromRequestParts<S> for Uids
 where
     S: Send + Sync,
@@ -220,11 +201,11 @@ where
         parts: &mut Parts,
         state: &S,
     ) -> Result<Option<Self>, Self::Rejection> {
-        Ok(
-            <Uids as FromRequestParts<S>>::from_request_parts(parts, state)
-                .await
-                .ok(),
-        )
+        let Ok(jar) = SignedCookieJar::<crate::Key>::from_request_parts(parts, state).await;
+
+        Ok(jar
+            .get("uid")
+            .map(|cookie| Uids(parse_uids(cookie.value_trimmed()))))
     }
 }
 
@@ -412,39 +393,46 @@ fn quality(parts: std::str::Split<'_, char>) -> f32 {
         .unwrap_or(1.0)
 }
 
+/// Pick the highest weighted entry of an `Accept`-style header, honoring `q=` weights.
+///
+/// `pick` maps one entry's media range or language tag to a value; entries it rejects are
+/// ignored. Position breaks ties so the first listed entry wins at equal weight.
+fn negotiate<T>(header: &str, pick: impl Fn(&str) -> Option<T>) -> Option<T> {
+    header
+        .split(',')
+        .enumerate()
+        .filter_map(|(idx, entry)| {
+            let mut parts = entry.split(';');
+            let value = pick(parts.next().map(str::trim)?)?;
+            // RFC 9110 §12.4.2: a weight of 0 marks the entry "not acceptable", a refusal rather
+            // than a last resort. Checked on the weight itself, before the tie-break nudges it.
+            let weight = Some(quality(parts)).filter(|weight| *weight > 0.0)?;
+
+            #[expect(clippy::cast_precision_loss)]
+            let weighted = weight - (idx as f32) * 1e-6;
+
+            Some((weighted, value))
+        })
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(_, value)| value)
+}
+
 /// Pick the representation an `Accept` header asks for, honoring `q=` weights.
 ///
 /// Media ranges other than the two concrete types are ignored, so `*/*` — what a bare `curl`
 /// and many libraries send — leaves the HTML default in place rather than being read as a
 /// preference either way.
 fn accepts_from_header(header: &str) -> Accepts {
-    header
-        .split(',')
-        .enumerate()
-        .filter_map(|(idx, entry)| {
-            let mut parts = entry.split(';');
-            let media = parts.next().map(str::trim)?;
-
-            let accepts = if media.eq_ignore_ascii_case("application/json") {
-                Accepts::Json
-            } else if media.eq_ignore_ascii_case("text/html") {
-                Accepts::Html
-            } else {
-                return None;
-            };
-
-            // RFC 9110 §12.4.2: a weight of 0 marks the entry "not acceptable", a refusal rather
-            // than a last resort. Checked on the weight itself, before the tie-break nudges it.
-            let weight = Some(quality(parts)).filter(|weight| *weight > 0.0)?;
-
-            // Position breaks ties so the first listed entry wins at equal weight.
-            #[expect(clippy::cast_precision_loss)]
-            let weighted = weight - (idx as f32) * 1e-6;
-
-            Some((weighted, accepts))
-        })
-        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-        .map_or(Accepts::default(), |(_, accepts)| accepts)
+    negotiate(header, |media| {
+        if media.eq_ignore_ascii_case("application/json") {
+            Some(Accepts::Json)
+        } else if media.eq_ignore_ascii_case("text/html") {
+            Some(Accepts::Html)
+        } else {
+            None
+        }
+    })
+    .unwrap_or_default()
 }
 
 impl<S> FromRequestParts<S> for Accepts
@@ -480,33 +468,7 @@ fn lang_from_tag(tag: &str) -> Option<Lang> {
 /// honoring `q=` weights. Falls back to the default language if nothing
 /// matches.
 fn lang_from_accept_language(header: &str) -> Lang {
-    header
-        .split(',')
-        .enumerate()
-        .filter_map(|(idx, entry)| {
-            let mut parts = entry.split(';');
-            let tag = parts.next().map(str::trim).filter(|t| !t.is_empty())?;
-            let lang = lang_from_tag(tag)?;
-
-            let q = parts
-                .find_map(|p| {
-                    let p = p.trim();
-                    p.strip_prefix("q=").or_else(|| p.strip_prefix("Q="))
-                })
-                .and_then(|s| s.parse::<f32>().ok())
-                .unwrap_or(1.0);
-            // RFC 9110 §12.4.2: a weight of 0 marks the entry "not acceptable", a refusal rather
-            // than a last resort. Checked on the weight itself, before the tie-break nudges it.
-            let q = Some(q).filter(|q| *q > 0.0)?;
-
-            // Use position as a tie-breaker so the first listed entry wins
-            // when weights are equal.
-            #[expect(clippy::cast_precision_loss)]
-            let weighted = q - (idx as f32) * 1e-6;
-            Some((weighted, lang))
-        })
-        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
-        .map_or(Lang::default(), |(_, l)| l)
+    negotiate(header, lang_from_tag).unwrap_or_default()
 }
 
 impl<S> FromRequestParts<S> for Lang
