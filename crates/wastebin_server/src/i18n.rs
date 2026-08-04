@@ -35,9 +35,30 @@ impl Lang {
 
     /// Look up `key` and substitute the `{0}` placeholder with `arg`'s
     /// `Display` representation.
+    ///
+    /// Translations may contain markup, so the result is rendered unescaped. `arg` is
+    /// caller-supplied and therefore HTML-escaped here.
     pub(crate) fn t_with(self, key: &'static str, arg: impl std::fmt::Display) -> String {
-        self.t(key).replace("{0}", &arg.to_string())
+        self.t(key).replace("{0}", &escape_html(&arg.to_string()))
     }
+}
+
+/// Escape the characters that let a value break out of text or an attribute.
+fn escape_html(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+
+    for c in value.chars() {
+        match c {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&#39;"),
+            _ => escaped.push(c),
+        }
+    }
+
+    escaped
 }
 
 static EN: phf::Map<&'static str, &'static str> = phf_map! {
@@ -279,6 +300,15 @@ mod tests {
     fn t_with_substitutes_placeholder() {
         let s = Lang::En.t_with("burn.body", "abc123");
         assert!(s.contains("href=\"/abc123\""));
+    }
+
+    #[test]
+    fn t_with_escapes_the_argument() {
+        let s = Lang::En.t_with("burn.body", r#"a."><img src=x>"#);
+        assert!(!s.contains("<img"), "raw markup leaked: {s}");
+        assert!(s.contains("&#39;") || s.contains("&quot;"), "{s}");
+        // The markup from the translation itself is preserved.
+        assert!(s.contains("<a class=\"text-link\""), "{s}");
     }
 
     #[test]
