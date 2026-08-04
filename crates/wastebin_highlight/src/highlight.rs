@@ -618,7 +618,20 @@ impl Html {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
+
+    /// Building one costs tens of milliseconds — it deserializes the whole syntax set — and it is
+    /// immutable, so the tests share a single instance rather than paying that per test.
+    static HIGHLIGHTER: LazyLock<Highlighter> = LazyLock::new(Highlighter::default);
+
+    /// Render `text` as `ext` and hand back the markup.
+    fn highlight_string(text: &str, ext: &str) -> Result<Arc<str>, Error> {
+        HIGHLIGHTER
+            .highlight(text.to_string(), Some(ext.to_string()))
+            .map(Html::into_inner)
+    }
 
     /// A paste is arbitrary text, but the view of it is an HTML document. C0 controls are not
     /// valid there — a parser must rewrite U+0000 and is free to mangle the rest.
@@ -629,13 +642,9 @@ mod tests {
     /// `.txt`, `.rs`, anything with a syntax — leaking them anyway.
     #[test]
     fn control_characters_do_not_reach_the_markup() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-
         // `txt` and `rs` take the syntect path; `md` takes this crate's own emitter.
         for ext in ["txt", "rs", "md"] {
-            let html = highlighter
-                .highlight("a\u{0}b\u{7}c\u{1b}d\u{7f}e".to_string(), Some(ext.into()))?
-                .into_inner();
+            let html = highlight_string("a\u{0}b\u{7}c\u{1b}d\u{7f}e", ext)?;
 
             for control in ['\u{0}', '\u{7}', '\u{1b}', '\u{7f}'] {
                 assert!(!html.contains(control), "ext {ext}: {control:?} survived");
@@ -647,9 +656,7 @@ mod tests {
         }
 
         // Tab is content and the line breaks drive the gutter, so all three are left alone.
-        let html = highlighter
-            .highlight("a\tb\nc\r\nd".to_string(), Some("txt".into()))?
-            .into_inner();
+        let html = highlight_string("a\tb\nc\r\nd", "txt")?;
         assert!(html.contains("a\tb"), "{html}");
         assert!(
             html.contains(r##"href="#L3""##),
@@ -657,9 +664,7 @@ mod tests {
         );
 
         // Escaping still happens and multi-byte text survives intact.
-        let html = highlighter
-            .highlight("<b>\u{0}héllo 世界".to_string(), Some("txt".into()))?
-            .into_inner();
+        let html = highlight_string("<b>\u{0}héllo 世界", "txt")?;
         assert!(html.contains("&lt;b&gt;\u{fffd}héllo 世界"), "{html}");
 
         Ok(())
@@ -670,13 +675,12 @@ mod tests {
     /// the cache to hold, so nothing ever amortised it.
     #[test]
     fn a_render_far_larger_than_its_input_is_refused() {
-        let highlighter = Highlighter::default();
         // Well under a default `WASTEBIN_MAX_BODY_SIZE`, and 81 MB of HTML before the bound.
         let text = "\n".repeat(1024 * 1024);
 
         assert!(
             matches!(
-                highlighter.highlight(text, Some("txt".into())),
+                HIGHLIGHTER.highlight(text, Some("txt".into())),
                 Err(Error::TooLarge(_))
             ),
             "an enormous render was produced anyway"
@@ -703,16 +707,12 @@ mod tests {
     /// making it visible, on every path that emits a row.
     #[test]
     fn a_reordering_character_is_marked() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-
         for (ext, label) in [
-            (Some("rs".to_string()), "syntect emitter"),
-            (Some("md".to_string()), "markdown emitter"),
-            (Some("zzz-not-a-syntax".to_string()), "plain text"),
+            ("rs", "syntect emitter"),
+            ("md", "markdown emitter"),
+            ("zzz-not-a-syntax", "plain text"),
         ] {
-            let html = highlighter
-                .highlight("let admin = \u{202e}false;\n".to_string(), ext)?
-                .into_inner();
+            let html = highlight_string("let admin = \u{202e}false;\n", ext)?;
 
             assert!(
                 html.contains(r#"data-cp="U+202E""#),
@@ -727,12 +727,9 @@ mod tests {
     /// anything added there would ride along into the clipboard and corrupt what was pasted.
     #[test]
     fn marking_does_not_change_the_text() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         let source = "let admin = \u{202e}false;\n";
 
-        let html = highlighter
-            .highlight(source.to_string(), Some("rs".into()))?
-            .into_inner();
+        let html = highlight_string(source, "rs")?;
 
         assert_eq!(
             text_of(&html).trim_start_matches(|c: char| c.is_ascii_digit()),
@@ -746,11 +743,7 @@ mod tests {
     /// wrapper must not introduce a line of its own.
     #[test]
     fn marking_does_not_add_a_row() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-
-        let html = highlighter
-            .highlight("one\ntw\u{202e}o\nthree\n".to_string(), Some("rs".into()))?
-            .into_inner();
+        let html = highlight_string("one\ntw\u{202e}o\nthree\n", "rs")?;
 
         assert!(html.contains(r#"data-cp="U+202E""#), "not marked: {html}");
         assert!(html.contains(r#"id="LC3""#), "third row missing");
@@ -764,14 +757,7 @@ mod tests {
     #[test]
     fn a_link_target_is_not_marked_inside_its_attribute() -> Result<(), Box<dyn std::error::Error>>
     {
-        let highlighter = Highlighter::default();
-
-        let html = highlighter
-            .highlight(
-                "[click](https://example.com/\u{202e}gnp.exe)\n".to_string(),
-                Some("md".into()),
-            )?
-            .into_inner();
+        let html = highlight_string("[click](https://example.com/\u{202e}gnp.exe)\n", "md")?;
 
         // The gutter emits `href="#L1"` for every row before any paste content does, so anchor
         // on the link's own target rather than on the first `href` in the document.
@@ -803,10 +789,9 @@ mod tests {
     /// The bound must not be reachable by anything a person would actually paste.
     #[test]
     fn an_ordinary_paste_still_renders() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         let text = "fn main() { println!(\"hello\"); }\n".repeat(10_000);
 
-        let html = highlighter.highlight(text, Some("rs".into()))?.into_inner();
+        let html = highlight_string(&text, "rs")?;
 
         assert!(html.contains("id=\"LC10000\""), "last row missing");
 
@@ -815,16 +800,13 @@ mod tests {
 
     #[test]
     fn long_lines_are_escaped() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         let line = format!(
             "{}<script>alert(1)</script>",
             "a".repeat(HIGHLIGHT_LINE_LENGTH_CUTOFF)
         );
         assert!(line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF);
 
-        let html = highlighter
-            .highlight(line, Some("txt".into()))?
-            .into_inner();
+        let html = highlight_string(&line, "txt")?;
 
         assert!(!html.contains("<script>"), "raw markup leaked: {html}");
         assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -834,35 +816,28 @@ mod tests {
 
     #[test]
     fn markdown_detection_follows_the_syntax_set() {
-        let highlighter = Highlighter::default();
-
         for ext in ["md", "markdown", "mdown"] {
             assert!(
-                highlighter.is_markdown(Some(ext)),
+                HIGHLIGHTER.is_markdown(Some(ext)),
                 "{ext} should be markdown"
             );
         }
 
         for ext in ["rs", "txt", ""] {
             assert!(
-                !highlighter.is_markdown(Some(ext)),
+                !HIGHLIGHTER.is_markdown(Some(ext)),
                 "{ext} should not be markdown"
             );
         }
 
-        assert!(!highlighter.is_markdown(None));
+        assert!(!HIGHLIGHTER.is_markdown(None));
     }
 
     #[test]
     fn markdown_links() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
+        let html = highlight_string("[hello](https://github.com/matze/wastebin)", "md")?;
 
-        let html = highlighter.highlight(
-            "[hello](https://github.com/matze/wastebin)".into(),
-            Some("md".into()),
-        )?;
-
-        assert!(html.into_inner().contains("<span class=\"markup underline link markdown\"><a href=\"https://github.com/matze/wastebin\">https://github.com/matze/wastebin</a></span>"));
+        assert!(html.contains("<span class=\"markup underline link markdown\"><a href=\"https://github.com/matze/wastebin\">https://github.com/matze/wastebin</a></span>"));
 
         Ok(())
     }
@@ -874,17 +849,13 @@ mod tests {
     #[test]
     fn a_link_target_that_is_not_navigable_gets_no_anchor() -> Result<(), Box<dyn std::error::Error>>
     {
-        let highlighter = Highlighter::default();
-
         for target in [
             "javascript:alert(document.domain)",
             "JaVaScRiPt:alert(1)",
             "data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==",
             "vbscript:msgbox(1)",
         ] {
-            let html = highlighter
-                .highlight(format!("[click]({target})"), Some("md".into()))?
-                .into_inner();
+            let html = highlight_string(&format!("[click]({target})"), "md")?;
 
             // The gutter is full of its own `#L1` anchors, so only the code rows are the subject.
             let (_, code) = html
@@ -924,17 +895,13 @@ mod tests {
     /// The ordinary case must keep working, including a relative target.
     #[test]
     fn a_navigable_link_target_still_gets_one() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-
         for target in [
             "https://example.com/a",
             "http://example.com",
             "mailto:someone@example.com",
             "./relative/path",
         ] {
-            let html = highlighter
-                .highlight(format!("[click]({target})"), Some("md".into()))?
-                .into_inner();
+            let html = highlight_string(&format!("[click]({target})"), "md")?;
 
             assert!(
                 html.contains(&format!(r#"<a href="{target}">"#)),
@@ -973,13 +940,10 @@ mod tests {
 
     #[test]
     fn rows_are_self_balanced_for_markdown_lists() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         let text = "## Features\n\n\
             * [axum](https://github.com/tokio-rs/axum) and [sqlite3](https://www.sqlite.org) backend\n\
             * comes as a single binary with low memory footprint\n";
-        let html = highlighter
-            .highlight(text.into(), Some("md".into()))?
-            .into_inner();
+        let html = highlight_string(text, "md")?;
 
         for row in html.split("</div>").filter(|s| s.contains("id=\"LC")) {
             assert!(
@@ -992,10 +956,7 @@ mod tests {
 
     #[test]
     fn markdown_link_is_well_nested() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-        let html = highlighter
-            .highlight("[hi](https://example.com)".into(), Some("md".into()))?
-            .into_inner();
+        let html = highlight_string("[hi](https://example.com)", "md")?;
 
         assert!(
             !html.contains("</span></a>"),

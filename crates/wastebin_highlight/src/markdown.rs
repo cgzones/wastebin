@@ -254,8 +254,12 @@ fn alert_title(kind: BlockQuoteKind) -> String {
 mod tests {
     use super::*;
 
-    fn render_string(text: &str, highlighter: &Highlighter) -> Result<std::sync::Arc<str>, Error> {
-        render(text, highlighter).map(Html::into_inner)
+    /// Building one costs tens of milliseconds — it deserializes the whole syntax set — and it is
+    /// immutable, so the tests share a single instance rather than paying that per test.
+    static HIGHLIGHTER: LazyLock<Highlighter> = LazyLock::new(Highlighter::default);
+
+    fn render_string(text: &str) -> Result<std::sync::Arc<str>, Error> {
+        render(text, &HIGHLIGHTER).map(Html::into_inner)
     }
 
     /// The sanitizer drops U+0000 but passes every other C0 control through, so an escape or a
@@ -263,8 +267,7 @@ mod tests {
     /// of this crate that is never re-escaped afterwards.
     #[test]
     fn control_characters_do_not_reach_the_markup() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-        let html = render_string("a\u{0}b\u{7}c\u{1b}d\n\n```\nx\u{7}y\n```\n", &highlighter)?;
+        let html = render_string("a\u{0}b\u{7}c\u{1b}d\n\n```\nx\u{7}y\n```\n")?;
 
         for control in ['\u{0}', '\u{7}', '\u{1b}'] {
             assert!(!html.contains(control), "{control:?} survived: {html:?}");
@@ -273,7 +276,7 @@ mod tests {
         assert!(html.contains("x\u{fffd}y"), "code block: {html}");
 
         // Tab is left alone — inside a fence it is content, not indentation.
-        let html = render_string("```\na\tb\n```\n", &highlighter)?;
+        let html = render_string("```\na\tb\n```\n")?;
         assert!(html.contains("a\tb"), "got: {html}");
 
         Ok(())
@@ -281,7 +284,7 @@ mod tests {
 
     #[test]
     fn heading() -> Result<(), Box<dyn std::error::Error>> {
-        let html = render_string("# Hello", &Highlighter::default())?;
+        let html = render_string("# Hello")?;
         assert!(html.contains("<h1>Hello</h1>"), "got: {html}");
         Ok(())
     }
@@ -289,7 +292,7 @@ mod tests {
     #[test]
     fn table() -> Result<(), Box<dyn std::error::Error>> {
         let md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(html.contains("<table>"), "got: {html}");
         assert!(html.contains("<th>a</th>"), "got: {html}");
         Ok(())
@@ -297,7 +300,7 @@ mod tests {
 
     #[test]
     fn task_list() -> Result<(), Box<dyn std::error::Error>> {
-        let html = render_string("- [x] done\n- [ ] open\n", &Highlighter::default())?;
+        let html = render_string("- [x] done\n- [ ] open\n")?;
         assert!(html.contains("type=\"checkbox\""), "got: {html}");
         assert!(html.contains("checked"), "got: {html}");
         Ok(())
@@ -305,10 +308,8 @@ mod tests {
 
     #[test]
     fn input_type_is_restricted_to_checkboxes() -> Result<(), Box<dyn std::error::Error>> {
-        let html = render_string(
-            r#"<input type="password" name="pw"><input type="checkbox" checked>"#,
-            &Highlighter::default(),
-        )?;
+        let html =
+            render_string(r#"<input type="password" name="pw"><input type="checkbox" checked>"#)?;
 
         // Task lists are the only reason `input` is allowed at all. A password field in a
         // rendered paste is a password-manager autofill phishing primitive.
@@ -320,7 +321,7 @@ mod tests {
 
     #[test]
     fn strikethrough() -> Result<(), Box<dyn std::error::Error>> {
-        let html = render_string("~~gone~~", &Highlighter::default())?;
+        let html = render_string("~~gone~~")?;
         assert!(html.contains("<del>gone</del>"), "got: {html}");
         Ok(())
     }
@@ -328,7 +329,7 @@ mod tests {
     #[test]
     fn code_block_is_highlighted() -> Result<(), Box<dyn std::error::Error>> {
         let md = "```rust\nfn main() {}\n```\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(
             html.contains("class=\"code-block language-rust\""),
             "got: {html}"
@@ -340,7 +341,7 @@ mod tests {
     #[test]
     fn code_block_unknown_language_falls_back() -> Result<(), Box<dyn std::error::Error>> {
         let md = "```not-a-real-lang\nhello\n```\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(html.contains("<pre"), "got: {html}");
         assert!(html.contains("hello"), "got: {html}");
         Ok(())
@@ -349,7 +350,7 @@ mod tests {
     #[test]
     fn code_block_without_language() -> Result<(), Box<dyn std::error::Error>> {
         let md = "```\nraw\n```\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(html.contains("class=\"code-block\""), "got: {html}");
         assert!(!html.contains("language-"), "got: {html}");
         Ok(())
@@ -358,7 +359,7 @@ mod tests {
     #[test]
     fn code_block_malicious_language_is_sanitized() -> Result<(), Box<dyn std::error::Error>> {
         let md = "```\"><script>\ncode\n```\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(!html.contains("<script>"), "got: {html}");
         Ok(())
     }
@@ -366,7 +367,7 @@ mod tests {
     #[test]
     fn gfm_alert_note() -> Result<(), Box<dyn std::error::Error>> {
         let md = "> [!NOTE]\n> body\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(
             html.contains("<blockquote class=\"markdown-alert-note\">"),
             "got: {html}"
@@ -388,7 +389,7 @@ mod tests {
             ("CAUTION", "markdown-alert-caution", "Caution"),
         ] {
             let md = format!("> [!{marker}]\n> body\n");
-            let html = render_string(&md, &Highlighter::default())?;
+            let html = render_string(&md)?;
             assert!(html.contains(class), "{marker}: {html}");
             assert!(
                 html.contains(&format!("<p class=\"markdown-alert-title\">{label}</p>")),
@@ -400,7 +401,7 @@ mod tests {
 
     #[test]
     fn plain_blockquote_is_not_an_alert() -> Result<(), Box<dyn std::error::Error>> {
-        let html = render_string("> just a quote\n", &Highlighter::default())?;
+        let html = render_string("> just a quote\n")?;
         assert!(html.contains("<blockquote>"), "got: {html}");
         assert!(!html.contains("markdown-alert"), "got: {html}");
         Ok(())
@@ -410,7 +411,7 @@ mod tests {
     fn dangerous_raw_html_is_stripped() -> Result<(), Box<dyn std::error::Error>> {
         let md =
             "<script>alert(1)</script>\n\n<a href=\"javascript:alert(1)\" onclick=\"x\">x</a>\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(!html.contains("<script"), "got: {html}");
         assert!(!html.contains("alert(1)"), "got: {html}");
         assert!(!html.contains("javascript:"), "got: {html}");
@@ -428,7 +429,7 @@ mod tests {
         let body = "\"".repeat(3 * 1024 * 1024);
         let md = format!("```pl\n{body}\n```\n");
 
-        let result = render(&md, &Highlighter::default());
+        let result = render(&md, &HIGHLIGHTER);
 
         assert!(
             matches!(result, Err(Error::TooLarge(_))),
@@ -443,7 +444,7 @@ mod tests {
         let line = "a ".repeat(4096);
         let md = format!("```rs\n{line}\n```\n");
 
-        let html = render_string(&md, &Highlighter::default()).unwrap();
+        let html = render_string(&md).unwrap();
 
         assert!(html.contains(&line), "content was dropped");
         assert!(
@@ -457,14 +458,12 @@ mod tests {
     /// that reorder a line have to be visible there too — in prose and inside a fenced block.
     #[test]
     fn a_reordering_character_is_marked() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
-
         for md in [
             "Some \u{202e}reordered prose.\n",
             "```rs\nlet admin = \u{202e}false;\n```\n",
             "- a list item with \u{200b}a zero-width space\n",
         ] {
-            let html = render_string(md, &highlighter)?;
+            let html = render_string(md)?;
 
             assert!(html.contains("data-cp=\"U+"), "not marked: {html}");
         }
@@ -476,10 +475,9 @@ mod tests {
     /// crate's own markup and the character it holds is not markup-significant.
     #[test]
     fn marking_does_not_reopen_the_sanitizer() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         let md = "<script>alert(1)</script>\n\n<img src=x onerror=alert(2)> \u{202e}text\n";
 
-        let html = render_string(md, &highlighter)?;
+        let html = render_string(md)?;
 
         assert!(!html.contains("<script"), "script survived: {html}");
         assert!(!html.contains("onerror"), "handler survived: {html}");
@@ -492,12 +490,11 @@ mod tests {
     /// attribute values before this runs, so a tag is exactly what it looks like.
     #[test]
     fn an_attribute_is_never_marked() -> Result<(), Box<dyn std::error::Error>> {
-        let highlighter = Highlighter::default();
         // A URL attribute is percent-encoded by the sanitizer, so the character only survives
         // verbatim in a plain one like `title` — which is where marking a tag would break out.
         let md = "<a title=\"x\u{202e}y\" href=\"https://example.com\">z\u{202e}w</a>\n";
 
-        let html = render_string(md, &highlighter)?;
+        let html = render_string(md)?;
 
         for (start, _) in html.match_indices('<') {
             let end = start + html[start..].find('>').unwrap_or(0);
@@ -514,7 +511,7 @@ mod tests {
     #[test]
     fn deeply_nested_markup_is_rejected() {
         let md = "<div>".repeat(MAX_NESTING_DEPTH + 10);
-        let result = render(&md, &Highlighter::default());
+        let result = render(&md, &HIGHLIGHTER);
         assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
     }
 
@@ -530,7 +527,7 @@ mod tests {
     #[test]
     fn nesting_hidden_behind_unmatched_close_tags_is_rejected() {
         let md = "<div></span>".repeat(MAX_NESTING_DEPTH + 10);
-        let result = render(&md, &Highlighter::default());
+        let result = render(&md, &HIGHLIGHTER);
         assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
     }
 
@@ -540,14 +537,14 @@ mod tests {
     #[test]
     fn a_slash_does_not_close_a_non_void_element() {
         let md = "<div/>".repeat(MAX_NESTING_DEPTH + 10);
-        let result = render(&md, &Highlighter::default());
+        let result = render(&md, &HIGHLIGHTER);
         assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
     }
 
     #[test]
     fn nesting_within_the_limit_still_renders() -> Result<(), Box<dyn std::error::Error>> {
         let md = "<div>".repeat(32);
-        let html = render_string(&md, &Highlighter::default())?;
+        let html = render_string(&md)?;
         assert!(html.contains("<div>"), "got: {html}");
         Ok(())
     }
@@ -556,7 +553,7 @@ mod tests {
     fn flat_markup_is_not_mistaken_for_nesting() -> Result<(), Box<dyn std::error::Error>> {
         // Siblings and void elements open no levels, so a long flat document must render.
         let md = format!("{}\n\n{}", "<div>x</div>".repeat(500), "<br>".repeat(500));
-        let html = render_string(&md, &Highlighter::default())?;
+        let html = render_string(&md)?;
         assert!(html.contains("<div>"), "got: {html}");
         Ok(())
     }
@@ -578,7 +575,7 @@ mod tests {
     #[test]
     fn safe_raw_html_survives() -> Result<(), Box<dyn std::error::Error>> {
         let md = "<details><summary>more</summary>hidden</details>\n\nPress <kbd>Ctrl</kbd>.\n";
-        let html = render_string(md, &Highlighter::default())?;
+        let html = render_string(md)?;
         assert!(html.contains("<details>"), "got: {html}");
         assert!(html.contains("<summary>more</summary>"), "got: {html}");
         assert!(html.contains("<kbd>Ctrl</kbd>"), "got: {html}");
