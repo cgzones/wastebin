@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
@@ -29,7 +31,7 @@ pub(crate) struct Rendered {
     /// Always `true` for this view; needed by the inherited paste template.
     is_markdown: bool,
     expiration: Option<Expiration>,
-    html: String,
+    html: Arc<str>,
     title: Option<String>,
 }
 
@@ -69,19 +71,21 @@ pub async fn get(
 
         let html = if let Some(cached) = cache.get(&key, Mode::Rendered) {
             tracing::trace!(?key, "found cached rendered markdown");
-            cached.into_inner()
+            cached
         } else {
             let highlighter = highlighter.clone();
-            let rendered =
+            let rendered: Arc<str> =
                 tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
-                    .await??;
+                    .await??
+                    .into_inner()
+                    .into();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache rendered markdown");
-                cache.put(&key, Mode::Rendered, rendered.clone());
+                cache.put(&key, Mode::Rendered, Arc::clone(&rendered));
             }
 
-            rendered.into_inner()
+            rendered
         };
 
         let rendered = Rendered {

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
@@ -53,7 +55,7 @@ pub(crate) struct Paste {
     is_available: bool,
     /// Expiration in case it was set.
     expiration: Option<Expiration>,
-    html: String,
+    html: Arc<str>,
     title: Option<String>,
     /// Whether the paste's extension identifies it as Markdown, enabling the rendered-view toggle.
     is_markdown: bool,
@@ -139,21 +141,22 @@ pub async fn get(
 
         let html = if let Some(html) = cache.get(&key, Mode::Source) {
             tracing::trace!(?key, "found cached item");
-            html.into_inner()
+            html
         } else {
-            let html = tokio::task::spawn_blocking({
-                let ext = key.ext.clone();
-                let highlighter = highlighter.clone();
-                move || highlighter.highlight(text, ext)
-            })
-            .await??;
+            let ext = key.ext.clone();
+            let highlighter = highlighter.clone();
+            let html: Arc<str> =
+                tokio::task::spawn_blocking(move || highlighter.highlight(text, ext))
+                    .await??
+                    .into_inner()
+                    .into();
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");
-                cache.put(&key, Mode::Source, html.clone());
+                cache.put(&key, Mode::Source, Arc::clone(&html));
             }
 
-            html.into_inner()
+            html
         };
 
         let paste = Paste {

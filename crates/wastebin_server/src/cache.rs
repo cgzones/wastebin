@@ -9,7 +9,6 @@ use crate::env;
 use crate::errors::Error;
 
 use wastebin_core::id::Id;
-use wastebin_highlight::Html;
 
 /// Cache based on identifier and format.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -19,7 +18,7 @@ pub(crate) struct Key {
 }
 
 /// Which representation of a paste a cached entry holds.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum Mode {
     /// Syntax-highlighted source view.
     Source,
@@ -27,28 +26,14 @@ pub(crate) enum Mode {
     Rendered,
 }
 
-/// Internal cache slot partitioning cached HTML by paste identity and render mode.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-struct Slot {
-    id: Id,
-    ext: Option<String>,
-    mode: Mode,
-}
+/// Cache slot: a paste identity paired with the representation it holds.
+type Slot = (Key, Mode);
 
-impl Slot {
-    fn new(key: &Key, mode: Mode) -> Self {
-        Self {
-            id: key.id,
-            ext: key.ext.clone(),
-            mode,
-        }
-    }
-}
-
-/// Stores formatted HTML.
+/// Stores rendered HTML, shared so that cache hits are a refcount bump rather than a copy of the
+/// whole document.
 #[derive(Clone)]
 pub(crate) struct Cache {
-    inner: Arc<Mutex<LruCache<Slot, Html>>>,
+    inner: Arc<Mutex<LruCache<Slot, Arc<str>>>>,
 }
 
 impl Cache {
@@ -59,28 +44,20 @@ impl Cache {
         Ok(Self { inner })
     }
 
-    pub fn put(&self, key: &Key, mode: Mode, value: Html) {
+    pub fn put(&self, key: &Key, mode: Mode, value: Arc<str>) {
         self.inner
             .lock()
             .expect("getting lock")
-            .cache_set(Slot::new(key, mode), value);
+            .cache_set((key.clone(), mode), value);
     }
 
     #[must_use]
-    pub fn get(&self, key: &Key, mode: Mode) -> Option<Html> {
+    pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<str>> {
         self.inner
             .lock()
             .expect("getting lock")
-            .cache_get(&Slot::new(key, mode))
-            .cloned()
-    }
-}
-
-impl Key {
-    /// Make a copy of the owned id.
-    #[must_use]
-    pub fn id(&self) -> String {
-        self.id.to_string()
+            .cache_get(&(key.clone(), mode))
+            .map(Arc::clone)
     }
 }
 
@@ -114,12 +91,12 @@ mod tests {
     #[test]
     fn cache_key() {
         let key = Key::from_str("bJZCna").unwrap();
-        assert_eq!(key.id(), "bJZCna");
+        assert_eq!(key.id.to_string(), "bJZCna");
         assert_eq!(key.id, Id::from(104_651_828_u32));
         assert_eq!(key.ext, None);
 
         let key = Key::from_str("sIiFec.rs").unwrap();
-        assert_eq!(key.id(), "sIiFec");
+        assert_eq!(key.id.to_string(), "sIiFec");
         assert_eq!(key.id, 1_243_750_162_u32.into());
         assert_eq!(key.ext.unwrap(), "rs");
 
