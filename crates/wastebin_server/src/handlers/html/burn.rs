@@ -204,6 +204,7 @@ mod tests {
     async fn burn_confirmation_does_not_delete() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
         let data = Entry {
+            text: String::from("FooBarBaz"),
             burn_after_reading: Some(String::from("on")),
             ..Default::default()
         };

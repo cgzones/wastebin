@@ -25,15 +25,14 @@ mod tests {
     use std::sync::Arc;
 
     use crate::Ratelimiter;
-    use crate::handlers::insert::form::Entry;
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, StoreCookies, some_entry};
     use reqwest::StatusCode;
 
     #[tokio::test]
     async fn delete() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(true)).await;
 
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         let location = res.headers().get("location").unwrap().to_str()?;
@@ -54,7 +53,7 @@ mod tests {
 
         // Establish a uid cookie so this exercises the ownership check rather than the
         // missing-cookie path.
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         let res = client.delete("/aaaaaa").send().await?;
@@ -74,7 +73,7 @@ mod tests {
         );
         let client = Client::new_with_ratelimit_delete(StoreCookies(true), Some(limiter)).await;
 
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
 
         let location = res.headers().get("location").unwrap().to_str()?;
@@ -106,12 +105,12 @@ mod tests {
         );
         let client = Client::new_with_ratelimit_delete(StoreCookies(true), Some(limiter)).await;
 
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str()?;
         let first_id = location.replace('/', "");
 
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         assert_eq!(res.status(), StatusCode::SEE_OTHER);
         let location = res.headers().get("location").unwrap().to_str()?;
         let second_id = location.replace('/', "");
@@ -137,7 +136,7 @@ mod tests {
     async fn delete_without_uid_cookie_is_forbidden() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
 
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         let location = res.headers().get("location").unwrap().to_str()?;
         let id = location.replace('/', "");
 

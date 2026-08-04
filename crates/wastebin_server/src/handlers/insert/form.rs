@@ -147,7 +147,7 @@ pub async fn post(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_helpers::{Client, StoreCookies};
+    use crate::test_helpers::{Client, StoreCookies, some_entry};
     use reqwest::{StatusCode, header};
     use std::collections::HashMap;
 
@@ -376,7 +376,7 @@ mod tests {
     #[tokio::test]
     async fn insert_sets_uid_cookie() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(true)).await;
-        let res = client.post_form().form(&Entry::default()).send().await?;
+        let res = client.post_form().form(&some_entry()).send().await?;
         let cookie = res.cookies().find(|cookie| cookie.name() == "uid").unwrap();
         assert_eq!(cookie.name(), "uid");
         assert!(cookie.value().len() > 40);

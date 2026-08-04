@@ -126,3 +126,14 @@ impl Client {
             .request(method, format!("http://{}{}", self.addr, url))
     }
 }
+
+/// A form entry carrying placeholder content, for the tests whose subject is not the body.
+///
+/// `Entry::default()` leaves `text` empty, which inserting rejects, so it cannot stand in for
+/// "some paste".
+pub(crate) fn some_entry() -> crate::handlers::insert::form::Entry {
+    crate::handlers::insert::form::Entry {
+        text: String::from("FooBarBaz"),
+        ..Default::default()
+    }
+}
