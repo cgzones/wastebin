@@ -134,7 +134,16 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
     };
 
     let headers: [(HeaderName, HeaderValue); 10] = [
-        (SERVER, HeaderValue::from_static(env!("CARGO_PKG_NAME"))),
+        // Every page already carries the exact version in its `generator` meta tag, so withholding
+        // it here bought nothing and only left the two disagreeing.
+        (
+            SERVER,
+            HeaderValue::from_static(concat!(
+                env!("CARGO_PKG_NAME"),
+                "/",
+                env!("CARGO_PKG_VERSION")
+            )),
+        ),
         // Severs `window.opener` and blocks other origins from pulling responses in as no-cors
         // subresources. Non-browser clients (curl, the API) are unaffected.
         (
@@ -441,6 +450,21 @@ mod tests {
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
         }
+
+        Ok(())
+    }
+
+    /// The `generator` meta tag in every page already names the version, so the header agrees
+    /// with it rather than reporting a bare product name.
+    #[tokio::test]
+    async fn server_header_carries_the_version() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let res = client.get("/").send().await?;
+
+        assert_eq!(
+            res.headers().get(http::header::SERVER).unwrap(),
+            concat!("wastebin/", env!("CARGO_PKG_VERSION"))
+        );
 
         Ok(())
     }
