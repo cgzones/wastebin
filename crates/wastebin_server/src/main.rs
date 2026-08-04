@@ -157,7 +157,10 @@ async fn security_headers_layer(req: Request, next: Next) -> impl IntoResponse {
             HeaderName::from_static("x-permitted-cross-domain-policies"),
             HeaderValue::from_static("none"),
         ),
-        (X_XSS_PROTECTION, HeaderValue::from_static("1; mode=block")),
+        // Explicitly off: the auditor this enabled was removed from every current browser after
+        // proving to be an XSS vector of its own, and `1; mode=block` still reaches the ones that
+        // kept it. The CSP above is what actually defends these pages.
+        (X_XSS_PROTECTION, HeaderValue::from_static("0")),
     ];
 
     let mut response = next.run(req).await;
@@ -438,6 +441,18 @@ mod tests {
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
         }
+
+        Ok(())
+    }
+
+    /// The XSS auditor was removed from current browsers after becoming a vulnerability itself,
+    /// so the header must switch it off rather than ask for it.
+    #[tokio::test]
+    async fn xss_auditor_is_disabled() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let res = client.get("/").send().await?;
+
+        assert_eq!(res.headers().get(http::header::X_XSS_PROTECTION).unwrap(), "0");
 
         Ok(())
     }
