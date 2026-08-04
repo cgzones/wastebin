@@ -30,8 +30,15 @@ pub async fn get(
         let key: Key = id.parse()?;
         let password = password.map(|Password(password)| password);
 
+        let metadata = db.get_metadata(key.id).await?;
+
+        // A download is a GET with no way to confirm the destruction; see `raw::get`.
+        if metadata.must_be_deleted {
+            return Err(crate::Error::BurnNotConfirmed);
+        }
+
         // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
-        if password.is_some() && db.get_metadata(key.id).await?.is_encrypted {
+        if password.is_some() && metadata.is_encrypted {
             ratelimit.check()?;
         }
 

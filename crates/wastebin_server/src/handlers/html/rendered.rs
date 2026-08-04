@@ -8,8 +8,8 @@ use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Accepts, Theme, Uids, can_delete};
-use crate::handlers::html::paste::PasswordForm;
-use crate::handlers::html::{ErrorResponse, make_error, password_input};
+use crate::handlers::html::paste::PasteForm;
+use crate::handlers::html::{BurnConfirmation, ErrorResponse, make_error, password_input};
 use crate::i18n::Lang;
 use crate::{Cache, Database, Highlighter, Page};
 use wastebin_core::crypto::Password;
@@ -49,24 +49,48 @@ pub async fn get(
     lang: Lang,
     accepts: Accepts,
     method: http::Method,
-    form: Result<Form<PasswordForm>, FormRejection>,
+    form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
         // Same reason as the source view: `Form` reads the query string on GET and HEAD, and a
         // password does not belong in a URL.
-        let password = form
+        let form = form
             .ok()
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
+        let password = form
+            .as_ref()
+            .and_then(|Form(form)| form.password.as_ref())
             // An empty field is no password at all: it derives nothing, yet it cost a token and
             // pushed the request off the cache on both the read and the write side.
-            .filter(|form| !form.password.is_empty())
-            .map(|form| Password::from(form.password.as_bytes().to_vec()));
+            .filter(|password| !password.is_empty())
+            .map(|password| Password::from(password.as_bytes().to_vec()));
+        let confirmed = form
+            .as_ref()
+            .and_then(|Form(form)| form.confirm_burn.as_deref())
+            == Some("1");
         let no_password = password.is_none();
 
         let key: Key = id.parse()?;
+        let metadata = db.get_metadata(key.id).await?;
+
+        // This view destroys the paste just as the source view does, so it has to ask first —
+        // otherwise anything that follows the URL, including an image in someone else's rendered
+        // paste, destroys it on the reader's behalf.
+        if metadata.must_be_deleted && !confirmed {
+            return Ok(BurnConfirmation {
+                page: page.clone(),
+                theme,
+                lang,
+                action: format!("/md/{key}"),
+                title: (!metadata.is_encrypted)
+                    .then(|| metadata.title.clone())
+                    .flatten(),
+            }
+            .into_response());
+        }
 
         // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
-        if !no_password && db.get_metadata(key.id).await?.is_encrypted {
+        if !no_password && metadata.is_encrypted {
             ratelimit.check()?;
         }
 
@@ -79,7 +103,7 @@ pub async fn get(
 
         let (html, is_available, metadata) = if let Some(cached) = cached {
             tracing::trace!(?key, "found cached rendered markdown");
-            (cached, true, db.get_metadata(key.id).await?)
+            (cached, true, metadata)
         } else {
             let (data, is_available) = match db.get(key.id, password).await {
                 Ok(Entry::Regular(data)) => (data, true),
@@ -165,6 +189,49 @@ mod tests {
             res.text().await?.contains("type=\"password\""),
             "expected the prompt, not a failed attempt"
         );
+
+        Ok(())
+    }
+
+    /// The interstitial submits `confirm_burn` alone, so a form type demanding a `password` field
+    /// rejected exactly the request its own template sends — the reveal button re-rendered the
+    /// confirmation forever and the rendered view of a burn paste could never be reached.
+    #[tokio::test]
+    async fn burn_confirmation_reveals_the_render() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# BurnedHeading"),
+            extension: Some(String::from("md")),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        // The confirmation comes first and reveals nothing.
+        let res = client
+            .get(&format!("/md/{id}"))
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.text().await?.contains("BurnedHeading"));
+
+        // Confirming with exactly what the template posts renders the paste and burns it.
+        let res = client
+            .post(&format!("/md/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.text().await?.contains("BurnedHeading"));
+
+        let res = client.get(&format!("/md/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
     }

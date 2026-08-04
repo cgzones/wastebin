@@ -29,11 +29,11 @@ pub(crate) struct OwnerHandoff {
     pub(crate) owner: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
-pub(crate) struct PasswordForm {
-    pub(crate) password: String,
-}
-
+/// Body of the two forms a paste view answers: the password prompt and the burn confirmation.
+///
+/// Every field is optional because each form submits only its own: the confirmation posts
+/// `confirm_burn` alone. A required `password` rejected exactly that request, leaving the reveal
+/// button re-rendering the confirmation forever.
 #[derive(Deserialize, Debug)]
 pub(crate) struct PasteForm {
     #[serde(default)]
@@ -166,7 +166,7 @@ pub async fn get(
                 page: page.clone(),
                 theme,
                 lang,
-                id,
+                action: format!("/{key}"),
                 // The interstitial comes before any password is asked for, and the title is not
                 // encrypted along with the content.
                 title: (!metadata.is_encrypted)

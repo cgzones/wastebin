@@ -26,10 +26,19 @@ pub async fn get(
         let password = password.map(|Password(password)| password);
         let key: Key = id.parse()?;
 
+        let metadata = db.get_metadata(key.id).await?;
+
+        // This route is a GET that returns bytes, so there is nowhere to confirm the destruction
+        // and nothing stopping anything that merely follows a URL from triggering it. The content
+        // stays reachable through the paste page, which does ask first.
+        if metadata.must_be_deleted {
+            return Err(crate::Error::BurnNotConfirmed);
+        }
+
         // Only an attempt that reaches argon2 is worth a token. The bucket is a single
         // process-wide one with no refund, so letting a password for a missing or unencrypted
         // paste spend one let anyone lock every user out of every encrypted paste for free.
-        if password.is_some() && db.get_metadata(key.id).await?.is_encrypted {
+        if password.is_some() && metadata.is_encrypted {
             ratelimit.check()?;
         }
 

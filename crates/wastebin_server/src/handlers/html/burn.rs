@@ -200,6 +200,107 @@ mod tests {
         Ok(())
     }
 
+    /// Only the paste page ever asked for a confirmation, so `/raw`, `/dl` and `/md` destroyed a
+    /// burn paste on a plain GET. Since `/md` runs the relaxed CSP that permits same-origin
+    /// images, a paste holding `![](/raw/OTHER_ID)` made every viewer's browser destroy someone
+    /// else's paste; a link unfurler did the same to any of them.
+    #[tokio::test]
+    async fn a_get_on_another_route_does_not_burn() -> Result<(), Box<dyn std::error::Error>> {
+        for route in ["raw", "dl", "md"] {
+            let client = Client::new(StoreCookies(false)).await;
+            let data = Entry {
+                text: String::from("secret-body-xyz"),
+                extension: Some(String::from("md")),
+                burn_after_reading: Some(String::from("on")),
+                ..Default::default()
+            };
+
+            let res = client.post_form().form(&data).send().await?;
+            assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+            let location = res
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()?
+                .replace("burn/", "");
+            let id = location.trim_start_matches('/').to_owned();
+
+            let res = client
+                .get(&format!("/{route}/{id}"))
+                .header(header::ACCEPT, "text/html; charset=utf-8")
+                .send()
+                .await?;
+            let status = res.status();
+            let body = res.text().await?;
+            assert!(
+                !body.contains("secret-body-xyz"),
+                "/{route} revealed the content: {status}"
+            );
+
+            // Whatever it answered, the paste is still there to be confirmed.
+            let res = client
+                .get(&location)
+                .header(header::ACCEPT, "text/html; charset=utf-8")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::OK, "/{route} burned the paste");
+            assert!(res.text().await?.contains(">reveal<"));
+        }
+
+        Ok(())
+    }
+
+    /// The rendered view still destroys the paste — it just asks first, and its interstitial has
+    /// to post back to itself rather than to the source view.
+    #[tokio::test]
+    async fn a_confirmed_burn_still_works_on_the_rendered_view()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# secret-body-xyz"),
+            extension: Some(String::from("md")),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res
+            .headers()
+            .get("location")
+            .unwrap()
+            .to_str()?
+            .replace("burn/", "");
+        let id = location.trim_start_matches('/').to_owned();
+
+        let body = client
+            .get(&format!("/md/{id}"))
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(
+            body.contains(&format!("action=\"/md/{id}\"")),
+            "interstitial must post back to the rendered view: {body}"
+        );
+
+        let res = client
+            .post(&format!("/md/{id}"))
+            .form(&[("password", ""), ("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html; charset=utf-8")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.text().await?.contains("secret-body-xyz"));
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "should be burned");
+
+        Ok(())
+    }
+
     /// The confirmation is a form field, and `Form` reads the query string on GET — so a link
     /// carrying `?confirm_burn=1` skipped the interstitial and destroyed the paste. Anything that
     /// merely follows a URL (an `<img>`, a prefetch, a link unfurler) could burn it.

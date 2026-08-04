@@ -47,6 +47,9 @@ pub(crate) enum Error {
     /// No route matched the request path.
     #[error("no such route")]
     RouteNotFound,
+    /// A burn-after-reading paste was asked for on a route that cannot confirm the destruction.
+    #[error("burn-after-reading paste needs confirmation")]
+    BurnNotConfirmed,
 }
 
 impl Error {
@@ -68,6 +71,7 @@ impl Error {
             Error::RateLimit => "error.rate_limit",
             Error::TooLongExpires => "error.too_long_expires",
             Error::MalformedForm => "error.malformed_form",
+            Error::BurnNotConfirmed => "error.burn_not_confirmed",
             Error::PayloadTooLarge => "error.payload_too_large",
             Error::UnsupportedMediaType => "error.unsupported_media_type",
             Error::MethodNotAllowed => "error.method_not_allowed",
@@ -128,6 +132,7 @@ impl From<&Error> for StatusCode {
                 wastebin_highlight::Error::TooDeeplyNested(_)
                 | wastebin_highlight::Error::TooLarge(_),
             ) => StatusCode::BAD_REQUEST,
+            Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,

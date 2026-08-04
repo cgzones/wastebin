@@ -41,7 +41,8 @@ pub(crate) struct BurnConfirmation {
     pub page: Page,
     pub theme: Theme,
     pub lang: Lang,
-    pub id: String,
+    /// Where the confirmation posts back to; the view that destroys the paste owns it.
+    pub action: String,
     pub title: Option<String>,
 }
 
