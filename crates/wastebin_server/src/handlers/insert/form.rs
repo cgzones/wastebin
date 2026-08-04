@@ -2,6 +2,7 @@ use std::num::NonZeroU32;
 
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
 use serde::{Deserialize, Serialize};
@@ -86,14 +87,20 @@ pub async fn post(
         ));
     }
 
-    let Ok(Form(entry)) = entry else {
-        return Err(make_error(
-            crate::Error::MalformedForm,
-            page,
-            theme,
-            lang,
-            accepts,
-        ));
+    let entry = match entry {
+        Ok(Form(entry)) => entry,
+        // The body limit arrives here as a rejection like any other, but folding it into
+        // "malformed" told someone whose upload was simply too big that their form was broken —
+        // and answered with a different status than the JSON endpoint does for the same body.
+        Err(rejection) => {
+            let error = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                crate::Error::PayloadTooLarge
+            } else {
+                crate::Error::MalformedForm
+            };
+
+            return Err(make_error(error, page, theme, lang, accepts));
+        }
     };
 
     async {
@@ -182,6 +189,33 @@ mod tests {
             ..Default::default()
         };
 
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        Ok(())
+    }
+
+    /// An oversized body used to fold into the "malformed form" rejection, so the web UI called a
+    /// too-large upload broken while the JSON endpoint called the same body too large.
+    #[tokio::test]
+    async fn oversized_form_is_too_large_not_malformed() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        // `make_app` is given a 1 MiB limit by the test harness.
+        let res = client
+            .post_form()
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body("x".repeat(2 * 1024 * 1024))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        // A body that is merely unparsable is still a different answer.
+        let data = Entry {
+            text: String::from("FooBarBaz"),
+            expires: Some(String::from("garbage")),
+            ..Default::default()
+        };
         let res = client.post_form().form(&data).send().await?;
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
