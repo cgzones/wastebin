@@ -104,9 +104,15 @@ pub async fn get(
         }
         // Redirect to the parsed key rather than the raw path, which is otherwise free to
         // steer the `Location` header off-site.
-        let key: Key = id
-            .parse()
-            .map_err(|err| make_error(err, page.clone(), theme, lang, accepts))?;
+        let key: Key = id.parse().map_err(|_| {
+            make_error(
+                crate::Error::RouteNotFound,
+                page.clone(),
+                theme,
+                lang,
+                accepts,
+            )
+        })?;
         let cookie = uid_cookie(&new_uids);
         return Ok((jar.add(cookie), Redirect::to(&format!("/{key}"))).into_response());
     }
@@ -120,7 +126,12 @@ pub async fn get(
             .map(|password| Password::from(password.as_bytes().to_vec()));
         let confirmed = form.as_ref().and_then(|form| form.confirm_burn.as_deref()) == Some("1");
         let no_password = password.is_none();
-        let key: Key = id.parse()?;
+        // This route is also every single-segment path no other route claimed, so a value that is
+        // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
+        // "that is not a valid paste identifier" described a paste the visitor never asked for.
+        // The routes that name a paste explicitly — `/raw/…`, `/dl/…`, `/md/…`, `/qr/…` — keep
+        // saying so, since there the caller did mean to address one.
+        let key: Key = id.parse().map_err(|_| crate::Error::RouteNotFound)?;
 
         let metadata = match db.get_metadata(key.id).await {
             Ok(metadata) => metadata,
@@ -201,6 +212,34 @@ mod tests {
     use crate::handlers::insert::form::Entry;
     use crate::test_helpers::{Client, StoreCookies};
     use reqwest::StatusCode;
+
+    /// This route doubles as the catch-all for single-segment paths, so `/about` used to answer
+    /// "that is not a valid paste identifier" — describing a paste the visitor never asked for.
+    #[tokio::test]
+    async fn mistyped_address_is_not_found() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in ["/about", "/api", "/nope", "/favicon"] {
+            let res = client.get(path).send().await?;
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "path {path}");
+        }
+
+        Ok(())
+    }
+
+    /// The routes that name a paste explicitly still say the identifier is the problem, since
+    /// there the caller really did mean to address one.
+    #[tokio::test]
+    async fn explicit_paste_routes_still_reject_the_id() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for path in ["/raw/short", "/dl/short", "/md/short", "/qr/short"] {
+            let res = client.get(path).send().await?;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "path {path}");
+        }
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn unknown_paste() -> Result<(), Box<dyn std::error::Error>> {
