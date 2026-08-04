@@ -21,6 +21,9 @@ pub(crate) enum Error {
     Id(#[from] id::Error),
     #[error("malformed form data")]
     MalformedForm,
+    /// A request an extractor could not parse into the handler's own type.
+    #[error("malformed request")]
+    MalformedRequest,
     #[error("extension names no known syntax")]
     InvalidExtension,
     #[error("paste has no content")]
@@ -72,6 +75,7 @@ impl Error {
             Error::TooLongExpires => "error.too_long_expires",
             Error::QrCode(_) => "error.qr_too_long",
             Error::MalformedForm => "error.malformed_form",
+            Error::MalformedRequest => "error.malformed_request",
             Error::BurnNotConfirmed => "error.burn_not_confirmed",
             Error::PayloadTooLarge => "error.payload_too_large",
             Error::UnsupportedMediaType => "error.unsupported_media_type",
@@ -135,6 +139,7 @@ impl From<&Error> for StatusCode {
             Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
             Error::QrCode(_) => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
+            Error::MalformedRequest => StatusCode::BAD_REQUEST,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,

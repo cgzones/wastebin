@@ -215,10 +215,22 @@ async fn handle_service_errors(
     let asked_options = req.method() == http::Method::OPTIONS;
     let response = next.run(req).await;
 
+    // An extractor answers a request it could not parse itself, in plain text, quoting the parser
+    // — the field names of the handler's own type and where in the input it gave up. Every error
+    // this crate raises is rendered instead, so a `text/plain` body at one of these statuses is
+    // one of those rejections rather than an answer a handler built.
+    let is_rejection = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|content_type| content_type.to_str().ok())
+        .is_some_and(|content_type| content_type.starts_with("text/plain"));
+
     let error = match response.status() {
         StatusCode::PAYLOAD_TOO_LARGE => Error::PayloadTooLarge,
         StatusCode::UNSUPPORTED_MEDIA_TYPE => Error::UnsupportedMediaType,
         StatusCode::METHOD_NOT_ALLOWED if !asked_options => Error::MethodNotAllowed,
+        StatusCode::UNPROCESSABLE_ENTITY if is_rejection => Error::MalformedForm,
+        StatusCode::BAD_REQUEST if is_rejection => Error::MalformedRequest,
         _ => return response,
     };
 
@@ -554,6 +566,38 @@ mod tests {
                 "408 is missing {header}",
             );
         }
+
+        Ok(())
+    }
+
+    /// An extractor answers a body it cannot parse itself, in plain text, quoting the parser: the
+    /// field names of the internal type and where in the input it gave up. That is exactly the
+    /// detail `Error::message_key` exists to keep out of a response, and it went out unlocalised
+    /// and outside the JSON envelope besides.
+    #[tokio::test]
+    async fn an_extractor_rejection_is_answered_like_any_other_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .post_json()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .header(http::header::ACCEPT, "application/json")
+            .body(r#"{"text":"AAA","text":"BBB"}"#)
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), http::StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body = res.text().await?;
+        assert!(
+            !body.contains("Failed to deserialize") && !body.contains("duplicate field"),
+            "parser detail reached the client: {body}"
+        );
+        assert!(
+            body.starts_with(r#"{"message":"#),
+            "not the JSON envelope: {body}"
+        );
 
         Ok(())
     }
