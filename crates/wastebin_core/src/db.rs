@@ -560,8 +560,9 @@ impl Handler {
         loop {
             let id = Id::rand();
 
-            let result = self.conn.execute(
+            let result = self.conn.prepare_cached(
                 "INSERT INTO entries (id, uid, data, burn_after_reading, nonce, expires, title, salt) VALUES (?1, ?2, ?3, ?4, ?5, datetime('now', ?6), ?7, ?8)",
+            )?.execute(
                 params![
                     id.to_i64(),
                     entry.uid,
@@ -613,11 +614,14 @@ impl Handler {
     }
 
     fn get_metadata(&self, id: Id) -> Result<Metadata, Error> {
-        let (metadata, expired) = self.conn.query_row(
-            concat!("SELECT ", metadata_columns!(), " FROM entries WHERE id=?1"),
-            params![id.to_i64()],
-            metadata_from_row,
-        )?;
+        let (metadata, expired) = self
+            .conn
+            .prepare_cached(concat!(
+                "SELECT ",
+                metadata_columns!(),
+                " FROM entries WHERE id=?1"
+            ))?
+            .query_row(params![id.to_i64()], metadata_from_row)?;
 
         self.evict_if_expired(id, expired)?;
 
@@ -625,14 +629,14 @@ impl Handler {
     }
 
     fn get(&self, id: Id) -> Result<DatabaseEntry, Error> {
-        let (entry, expired) = self.conn.query_row(
-            concat!(
+        let (entry, expired) = self
+            .conn
+            .prepare_cached(concat!(
                 "SELECT ",
                 metadata_columns!(),
                 ", data, nonce, salt FROM entries WHERE id=?1"
-            ),
-            params![id.to_i64()],
-            |row| {
+            ))?
+            .query_row(params![id.to_i64()], |row| {
                 let (metadata, expired) = metadata_from_row(row)?;
 
                 let nonce = row
@@ -656,8 +660,7 @@ impl Handler {
                     },
                     expired,
                 ))
-            },
-        )?;
+            })?;
 
         self.evict_if_expired(id, expired)?;
 
@@ -671,7 +674,8 @@ impl Handler {
     fn take(&self, id: Id) -> Result<bool, Error> {
         let affected = self
             .conn
-            .execute("DELETE FROM entries WHERE id=?1", params![id.to_i64()])?;
+            .prepare_cached("DELETE FROM entries WHERE id=?1")?
+            .execute(params![id.to_i64()])?;
 
         Ok(affected > 0)
     }
@@ -682,7 +686,7 @@ impl Handler {
         let mut affected = 0;
 
         {
-            let mut stmt = tx.prepare("DELETE FROM entries WHERE id=?1")?;
+            let mut stmt = tx.prepare_cached("DELETE FROM entries WHERE id=?1")?;
 
             for id in ids {
                 affected += stmt.execute(params![id.to_i64()])?;
@@ -701,6 +705,8 @@ impl Handler {
         let placeholders = vec!["?"; uids.len()].join(",");
         let delete_sql = format!("DELETE FROM entries WHERE id=? AND uid IN ({placeholders})");
 
+        // Not cached: the text varies with the number of uids, so caching it would spend a slot
+        // per owner count and push the fixed statements out of a cache sized for them.
         let params = std::iter::once(id.to_i64()).chain(uids.iter().copied());
         let affected = self.conn.execute(&delete_sql, params_from_iter(params))?;
 
@@ -712,17 +718,18 @@ impl Handler {
     }
 
     fn next_uid(&self) -> Result<i64, Error> {
-        let uid = self.conn.query_row(
-            "UPDATE uids SET n = n + 1 WHERE id = 0 RETURNING n",
-            [],
-            |row| row.get(0),
-        )?;
+        let uid = self
+            .conn
+            .prepare_cached("UPDATE uids SET n = n + 1 WHERE id = 0 RETURNING n")?
+            .query_row([], |row| row.get(0))?;
 
         Ok(uid)
     }
 
     fn ping(&self) -> Result<(), Error> {
-        self.conn.query_row("SELECT 1", [], |_| Ok(()))?;
+        self.conn
+            .prepare_cached("SELECT 1")?
+            .query_row([], |_| Ok(()))?;
 
         Ok(())
     }
@@ -730,7 +737,7 @@ impl Handler {
     fn list(&self) -> Result<Vec<ListEntry>, Error> {
         let entries = self
             .conn
-            .prepare(
+            .prepare_cached(
                 "SELECT id, title, nonce, burn_after_reading, expires, expires < datetime('now') FROM entries",
             )?
             .query_map([], |row| {
@@ -751,7 +758,7 @@ impl Handler {
     fn purge(&self) -> Result<Vec<Id>, Error> {
         let ids = self
             .conn
-            .prepare("DELETE FROM entries WHERE expires < datetime('now') RETURNING id")?
+            .prepare_cached("DELETE FROM entries WHERE expires < datetime('now') RETURNING id")?
             .query_map([], |row| Ok(Id::from(row.get::<_, i64>(0)?)))?
             .collect::<Result<_, _>>()?;
 
