@@ -1,8 +1,10 @@
+use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 use chacha20poly1305::aead::{Aead, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305, XNonce};
 use rand::RngExt;
+use tokio::sync::Semaphore;
 use tokio::task::spawn_blocking;
 
 static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
@@ -21,6 +23,23 @@ static CONFIG: LazyLock<argon2::Config> = LazyLock::new(|| argon2::Config {
 /// when the [`Salt`] is constructed rather than on the first encrypted paste.
 pub const MIN_SALT_LEN: usize = 8;
 
+/// Bounds how many key derivations run at once.
+///
+/// A derivation costs [`CONFIG`]`.mem_cost` — 64 MiB — for as long as it runs, and reading any
+/// password-protected paste starts one before the ciphertext is even looked at, so a wrong
+/// password costs the same as a right one. Without a bound, concurrent readers of a single
+/// encrypted paste are a memory-exhaustion lever: the blocking pool alone would allow hundreds of
+/// derivations, hence tens of gigabytes. The work is CPU- and memory-bound, so the machine's
+/// parallelism is as much of it as can usefully proceed at once.
+static DERIVATION_LIMIT: LazyLock<usize> = LazyLock::new(|| {
+    std::thread::available_parallelism()
+        .unwrap_or(NonZeroUsize::MIN)
+        .get()
+});
+
+static DERIVATIONS: LazyLock<Arc<Semaphore>> =
+    LazyLock::new(|| Arc::new(Semaphore::new(*DERIVATION_LIMIT)));
+
 /// Encryption or decryption errors.
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
@@ -34,6 +53,8 @@ pub enum Error {
     ChaCha20Poly1305Decrypt,
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
+    #[error("key derivation limiter is gone")]
+    DerivationLimiterGone,
 }
 
 /// Encrypted data item.
@@ -84,10 +105,24 @@ fn cipher_from(password: &[u8], salt: &Salt) -> Result<XChaCha20Poly1305, Error>
     Ok(XChaCha20Poly1305::new(&key))
 }
 
+/// Wait for a key-derivation slot.
+///
+/// The permit is owned so it can move into the blocking closure and cover the derivation itself:
+/// a caller that goes away must not release the slot while its work is still running.
+async fn derivation_permit() -> Result<tokio::sync::OwnedSemaphorePermit, Error> {
+    Arc::clone(&DERIVATIONS)
+        .acquire_owned()
+        .await
+        .map_err(|_| Error::DerivationLimiterGone)
+}
+
 impl Plaintext {
     /// Consume and encrypt plaintext into [`Encrypted`] using `password`.
     pub async fn encrypt(self, password: Password, salt: Salt) -> Result<Encrypted, Error> {
+        let permit = derivation_permit().await?;
+
         spawn_blocking(move || {
+            let _permit = permit;
             let cipher = cipher_from(&password.0, &salt)?;
             let nonce = XNonce::from(rand::rng().random::<[u8; 24]>());
             let ciphertext = cipher
@@ -109,7 +144,10 @@ impl Encrypted {
 
     /// Decrypt into bytes using `password`.
     pub async fn decrypt(self, password: Password, salt: Salt) -> Result<Vec<u8>, Error> {
+        let permit = derivation_permit().await?;
+
         spawn_blocking(move || {
+            let _permit = permit;
             let cipher = cipher_from(&password.0, &salt)?;
             let plaintext = cipher
                 .decrypt(&self.nonce, self.ciphertext.as_ref())
@@ -149,6 +187,37 @@ mod tests {
 
         // The shortest salt argon2 accepts.
         assert!(Salt::try_from("a".repeat(MIN_SALT_LEN)).is_ok());
+    }
+
+    /// The limiter is process-wide, so this asserts only invariants that other tests running in
+    /// parallel cannot perturb: derivations still complete when more are asked for than the limit
+    /// allows, and no path ever hands back more permits than it took.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn concurrent_derivations_are_bounded() {
+        assert!(*DERIVATION_LIMIT >= 1, "limiter must allow progress");
+
+        let salt = Salt::try_from("somesalt".to_string()).unwrap();
+        let batch = (0..*DERIVATION_LIMIT * 2)
+            .map(|_| {
+                let salt = salt.clone();
+
+                tokio::spawn(async move {
+                    Plaintext::from(b"encrypt me".to_vec())
+                        .encrypt(Password::from(b"secret".to_vec()), salt)
+                        .await
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for task in batch {
+            // A leaked permit would deadlock this instead of failing it.
+            task.await.unwrap().unwrap();
+        }
+
+        assert!(
+            DERIVATIONS.available_permits() <= *DERIVATION_LIMIT,
+            "released more permits than were taken"
+        );
     }
 
     #[tokio::test]

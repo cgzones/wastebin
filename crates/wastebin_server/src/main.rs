@@ -337,9 +337,31 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> ExitCode {
-    match start().await {
+/// Upper bound on threads for blocking work, per CPU.
+///
+/// Everything dispatched to the blocking pool is CPU- or memory-bound: key derivation, syntax
+/// highlighting, Markdown rendering, compression and the database. None of it benefits from
+/// running hundreds deep, and tokio's default of 512 threads is a ceiling high enough that a
+/// backlog turns into memory exhaustion before it turns into queueing. A small multiple of the
+/// CPU count leaves headroom for the database handler, which occupies a thread permanently.
+const BLOCKING_THREADS_PER_CPU: usize = 4;
+
+fn main() -> ExitCode {
+    let cpus = std::thread::available_parallelism().map_or(1, std::num::NonZeroUsize::get);
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .max_blocking_threads(cpus * BLOCKING_THREADS_PER_CPU)
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            eprintln!("Error: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    match runtime.block_on(start()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("Error: {err}");
