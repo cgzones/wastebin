@@ -132,6 +132,20 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "error.title" => "Error 😢",
     "error.back" => "go back",
 
+    "error.not_found" => "This paste does not exist, or it has already expired.",
+    "error.forbidden" => "You are not allowed to do that.",
+    "error.cross_site" => "That request did not come from this site.",
+    "error.wrong_password" => "Wrong password.",
+    "error.no_password" => "This paste is encrypted and needs a password.",
+    "error.invalid_id" => "That is not a valid paste identifier.",
+    "error.rate_limit" => "Too many requests. Please try again in a moment.",
+    "error.too_long_expires" => "The requested expiration is longer than this server allows.",
+    "error.malformed_form" => "The submitted form could not be processed.",
+    "error.payload_too_large" => "The paste is larger than this server accepts.",
+    "error.unsupported_media_type" => "That content type is not supported here.",
+    "error.too_deeply_nested" => "This paste is nested too deeply to render.",
+    "error.internal" => "Something went wrong on the server.",
+
     "qr.label" => "qr code",
 };
 
@@ -206,6 +220,20 @@ static DE: phf::Map<&'static str, &'static str> = phf_map! {
     "error.title" => "Fehler 😢",
     "error.back" => "Zurück",
 
+    "error.not_found" => "Dieser Paste existiert nicht oder ist bereits abgelaufen.",
+    "error.forbidden" => "Das ist dir nicht erlaubt.",
+    "error.cross_site" => "Diese Anfrage kam nicht von dieser Seite.",
+    "error.wrong_password" => "Falsches Passwort.",
+    "error.no_password" => "Dieser Paste ist verschlüsselt und benötigt ein Passwort.",
+    "error.invalid_id" => "Das ist keine gültige Paste-Kennung.",
+    "error.rate_limit" => "Zu viele Anfragen. Bitte versuche es gleich noch einmal.",
+    "error.too_long_expires" => "Die gewünschte Ablaufzeit ist länger als dieser Server erlaubt.",
+    "error.malformed_form" => "Das abgeschickte Formular konnte nicht verarbeitet werden.",
+    "error.payload_too_large" => "Der Paste ist größer als dieser Server annimmt.",
+    "error.unsupported_media_type" => "Dieser Inhaltstyp wird hier nicht unterstützt.",
+    "error.too_deeply_nested" => "Dieser Paste ist zu tief verschachtelt, um dargestellt zu werden.",
+    "error.internal" => "Auf dem Server ist etwas schiefgelaufen.",
+
     "qr.label" => "QR-Code",
 };
 
@@ -279,6 +307,20 @@ static ZH: phf::Map<&'static str, &'static str> = phf_map! {
 
     "error.title" => "错误 😢",
     "error.back" => "返回",
+
+    "error.not_found" => "该剪贴不存在，或已经过期。",
+    "error.forbidden" => "你没有执行该操作的权限。",
+    "error.cross_site" => "该请求并非来自本站。",
+    "error.wrong_password" => "密码错误。",
+    "error.no_password" => "该剪贴已加密，需要密码。",
+    "error.invalid_id" => "这不是有效的剪贴标识符。",
+    "error.rate_limit" => "请求过于频繁，请稍后再试。",
+    "error.too_long_expires" => "请求的有效期超出本服务器允许的范围。",
+    "error.malformed_form" => "无法处理提交的表单。",
+    "error.payload_too_large" => "该剪贴超出本服务器接受的大小。",
+    "error.unsupported_media_type" => "此处不支持该内容类型。",
+    "error.too_deeply_nested" => "该剪贴嵌套层级过深，无法渲染。",
+    "error.internal" => "服务器发生了错误。",
 
     "qr.label" => "二维码",
 };
