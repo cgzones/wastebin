@@ -1,3 +1,5 @@
+mod nesting;
+
 use std::sync::LazyLock;
 
 use ammonia::Builder;
@@ -7,6 +9,7 @@ use pulldown_cmark::{
 
 use crate::highlight::Error;
 use crate::{Highlighter, Html};
+use nesting::nesting_depth;
 
 const OPTIONS: Options = Options::ENABLE_TABLES
     .union(Options::ENABLE_STRIKETHROUGH)
@@ -25,18 +28,32 @@ static SANITIZER: LazyLock<Builder<'static>> = LazyLock::new(|| {
     builder
 });
 
+/// Deepest markup nesting handed to the sanitizer.
+///
+/// Building the DOM is quadratic in nesting depth, and raw HTML in a paste reaches it verbatim:
+/// a megabyte of `<div>` is a quarter million levels deep and costs minutes of CPU. Prose does not
+/// come close to this bound — deeply nested lists sit around a dozen levels.
+const MAX_NESTING_DEPTH: usize = 256;
+
 /// Render `CommonMark` `text` to HTML. Fenced code blocks with a known language are syntax
 /// highlighted via `highlighter`; unknown languages fall back to plain text.
 ///
 /// Raw HTML embedded in the source is passed through the parser and then sanitized by
 /// [`ammonia`], so tags like `<details>` or `<kbd>` survive while `<script>`, inline event
 /// handlers, `javascript:` URLs and other XSS vectors are stripped.
+///
+/// Markup nested deeper than [`MAX_NESTING_DEPTH`] is rejected instead of sanitized.
 pub fn render(text: &str, highlighter: &Highlighter) -> Result<Html, Error> {
     let parser = Parser::new_ext(text, OPTIONS);
     let events = rewrite_events(parser, highlighter)?;
 
     let mut raw = String::with_capacity(text.len());
     html::push_html(&mut raw, events.into_iter());
+
+    let depth = nesting_depth(&raw);
+    if depth > MAX_NESTING_DEPTH {
+        return Err(Error::TooDeeplyNested(MAX_NESTING_DEPTH));
+    }
 
     Ok(Html::new(SANITIZER.clean(&raw).to_string()))
 }
@@ -219,6 +236,47 @@ mod tests {
         assert!(!html.contains("alert(1)"), "got: {html}");
         assert!(!html.contains("javascript:"), "got: {html}");
         assert!(!html.contains("onclick"), "got: {html}");
+        Ok(())
+    }
+
+    #[test]
+    fn deeply_nested_markup_is_rejected() {
+        let md = "<div>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
+    #[test]
+    fn nesting_hidden_behind_unmatched_close_tags_is_rejected() {
+        let md = "<div></span>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
+    /// HTML5 ignores a trailing slash on anything but a void element, so `<div/>` opens a level
+    /// just like `<div>`. Honouring the slash on any tag let a paste declare itself flat and hand
+    /// the sanitizer the deep tree the limit exists to refuse.
+    #[test]
+    fn a_slash_does_not_close_a_non_void_element() {
+        let md = "<div/>".repeat(MAX_NESTING_DEPTH + 10);
+        let result = render(&md, &Highlighter::default());
+        assert!(matches!(result, Err(Error::TooDeeplyNested(_))));
+    }
+
+    #[test]
+    fn nesting_within_the_limit_still_renders() -> Result<(), Box<dyn std::error::Error>> {
+        let md = "<div>".repeat(32);
+        let html = render_string(&md, &Highlighter::default())?;
+        assert!(html.contains("<div>"), "got: {html}");
+        Ok(())
+    }
+
+    #[test]
+    fn flat_markup_is_not_mistaken_for_nesting() -> Result<(), Box<dyn std::error::Error>> {
+        // Siblings and void elements open no levels, so a long flat document must render.
+        let md = format!("{}\n\n{}", "<div>x</div>".repeat(500), "<br>".repeat(500));
+        let html = render_string(&md, &Highlighter::default())?;
+        assert!(html.contains("<div>"), "got: {html}");
         Ok(())
     }
 

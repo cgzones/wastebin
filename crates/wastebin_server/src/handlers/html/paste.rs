@@ -134,24 +134,23 @@ pub async fn get(
         // served from metadata alone — no need to read and decompress the body just to drop it.
         let cached = no_password.then(|| cache.get(&key, Mode::Source)).flatten();
 
-        let (html, is_available, encrypted, metadata) = if let Some(html) = cached {
+        let (html, is_available, encrypted, metadata, burn) = if let Some(html) = cached {
             tracing::trace!(?key, "found cached item");
-            (html, true, false, metadata)
+            (html, true, false, metadata, None)
         } else {
-            let (data, is_available, encrypted) = match db.get(key.id, password).await {
-                Ok(Entry::Regular(data)) => (data, true, false),
-                Ok(Entry::Burned(data)) => (data, false, false),
-                Ok(Entry::Encrypted(data)) => {
-                    let is_available = !data.metadata.must_be_deleted;
-                    (data, is_available, true)
-                }
+            let Entry {
+                data: Data { text, metadata },
+                encrypted,
+                burn,
+            } = match db.get(key.id, password).await {
+                Ok(entry) => entry,
                 Err(db::Error::NoPassword) => {
                     return Ok(password_input(page, theme, lang, FormAction::source(&key)));
                 }
                 Err(err) => return Err(err.into()),
             };
+            let is_available = burn.is_none();
 
-            let Data { text, metadata } = data;
             let ext = key.ext.clone();
             let highlighter = highlighter.clone();
             let html: Arc<String> =
@@ -164,7 +163,7 @@ pub async fn get(
                 cache.put(&key, Mode::Source, Arc::clone(&html));
             }
 
-            (html, is_available, encrypted, metadata)
+            (html, is_available, encrypted, metadata, burn)
         };
 
         let Metadata {
@@ -188,11 +187,23 @@ pub async fn get(
         };
 
         let response = paste.into_response();
-        Ok(if encrypted {
+        let response = if encrypted {
             response.no_store()
         } else {
             response
-        })
+        };
+
+        // Burned only once there is a page to show: a render or a template that fails drops the
+        // ticket and leaves the paste for another attempt, rather than taking the one read with
+        // it. The delete still settles concurrent readers — only the one whose burn removed the
+        // row gets its page out.
+        if let Some(burn) = burn
+            && response.status().is_success()
+        {
+            db.burn(burn).await?;
+        }
+
+        Ok(response)
     }
     .await
     .map_err(|err| make_error(err, appstate.page, theme, lang))

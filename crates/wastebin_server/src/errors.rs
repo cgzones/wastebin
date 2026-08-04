@@ -51,7 +51,10 @@ impl From<Error> for StatusCode {
             Error::Database(db::Error::NoPassword)
             | Error::Id(_)
             | Error::UrlParsing(_)
-            | Error::TooLongExpires => StatusCode::BAD_REQUEST,
+            | Error::TooLongExpires
+            | Error::SyntaxHighlighting(wastebin_highlight::Error::TooDeeplyNested(_)) => {
+                StatusCode::BAD_REQUEST
+            }
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,

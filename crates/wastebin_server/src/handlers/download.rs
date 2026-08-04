@@ -27,16 +27,29 @@ pub async fn get(
         let key: Key = id.parse()?;
         let password = password.map(|Password(password)| password);
 
-        match db.get(key.id, password).await {
-            Ok(Entry::Regular(data) | Entry::Burned(data)) => {
-                Ok(get_download(&key, data).into_response())
-            }
-            Ok(Entry::Encrypted(data)) => Ok(get_download(&key, data).into_response().no_store()),
+        let Entry {
+            data,
+            encrypted,
+            burn,
+        } = match db.get(key.id, password).await {
+            Ok(entry) => entry,
             Err(db::Error::NoPassword) => {
-                Ok(password_input(&page, theme, lang, FormAction::source(&key)))
+                return Ok(password_input(&page, theme, lang, FormAction::source(&key)));
             }
-            Err(err) => Err(err.into()),
+            Err(err) => return Err(err.into()),
+        };
+
+        // Whatever serves the content is what burns it.
+        if let Some(burn) = burn {
+            db.burn(burn).await?;
         }
+
+        let response = get_download(&key, data).into_response();
+        Ok(if encrypted {
+            response.no_store()
+        } else {
+            response
+        })
     }
     .await
     .map_err(|err| make_error(err, page, theme, lang))

@@ -80,17 +80,16 @@ pub async fn get(
             .then(|| cache.get(&key, Mode::Rendered))
             .flatten();
 
-        let (html, is_available, encrypted, metadata) = if let Some(cached) = cached {
+        let (html, is_available, encrypted, metadata, burn) = if let Some(cached) = cached {
             tracing::trace!(?key, "found cached rendered markdown");
-            (cached, true, false, metadata)
+            (cached, true, false, metadata, None)
         } else {
-            let (data, is_available, encrypted) = match db.get(key.id, password).await {
-                Ok(Entry::Regular(data)) => (data, true, false),
-                Ok(Entry::Burned(data)) => (data, false, false),
-                Ok(Entry::Encrypted(data)) => {
-                    let is_available = !data.metadata.must_be_deleted;
-                    (data, is_available, true)
-                }
+            let Entry {
+                data: Data { text, metadata },
+                encrypted,
+                burn,
+            } = match db.get(key.id, password).await {
+                Ok(entry) => entry,
                 Err(db::Error::NoPassword) => {
                     return Ok(password_input(
                         &page,
@@ -101,8 +100,8 @@ pub async fn get(
                 }
                 Err(err) => return Err(err.into()),
             };
+            let is_available = burn.is_none();
 
-            let Data { text, metadata } = data;
             let highlighter = highlighter.clone();
             let rendered: Arc<String> =
                 tokio::task::spawn_blocking(move || markdown::render(&text, &highlighter))
@@ -114,7 +113,7 @@ pub async fn get(
                 cache.put(&key, Mode::Rendered, Arc::clone(&rendered));
             }
 
-            (rendered, is_available, encrypted, metadata)
+            (rendered, is_available, encrypted, metadata, burn)
         };
 
         let Metadata {
@@ -138,11 +137,23 @@ pub async fn get(
         };
 
         let response = rendered.into_response();
-        Ok(if encrypted {
+        let response = if encrypted {
             response.no_store()
         } else {
             response
-        })
+        };
+
+        // Burned only once there is a page to show: a render or a template that fails drops the
+        // ticket and leaves the paste for another attempt, rather than taking the one read with
+        // it. The delete still settles concurrent readers — only the one whose burn removed the
+        // row gets its page out.
+        if let Some(burn) = burn
+            && response.status().is_success()
+        {
+            db.burn(burn).await?;
+        }
+
+        Ok(response)
     }
     .await
     .map_err(|err| make_error(err, page, theme, lang))
@@ -247,6 +258,53 @@ mod tests {
             .send()
             .await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    /// Markdown nested past the parser's limit fails to render on every attempt, and the reveal
+    /// burnt the paste before rendering it: the one read went to an error page and the paste was
+    /// gone. The source view can still show it, so the failed attempt has to leave it there.
+    #[tokio::test]
+    async fn a_failed_render_leaves_a_burn_paste_for_another_view()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: "<div>".repeat(300),
+            extension: Some(String::from("md")),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        for attempt in 0..2 {
+            let res = client
+                .post(&format!("/md/{id}"))
+                .form(&[("confirm_burn", "1")])
+                .header(header::ACCEPT, "text/html")
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST, "attempt {attempt}");
+        }
+
+        let res = client
+            .post(&format!("/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.text().await?.contains("confirm_burn"), "not revealed");
+
+        let res = client
+            .post(&format!("/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "revealed twice");
 
         Ok(())
     }

@@ -299,20 +299,38 @@ pub mod read {
         pub title: Option<String>,
         /// Entry expiration datetime
         pub expiration: Option<Expiration>,
-        /// Entry will be deleted the next time it is fetched via [`Database::get`].
+        /// Entry is deleted once the [`Burn`] that [`super::Database::get`] hands out for it is
+        /// redeemed.
         pub must_be_deleted: bool,
     }
 
-    /// Potentially deleted or non-existent expired entry.
+    /// An entry as read for a caller about to show it.
+    ///
+    /// `#[must_use]` here and on [`Burn`] is a lint hint, not a guarantee: destructuring with
+    /// `..` drops the ticket without a word. What keeps a burn-after-reading entry to one reader
+    /// is every caller that serves content redeeming `burn` first.
     #[derive(Debug)]
-    pub enum Entry {
-        /// Entry found and still available.
-        Regular(Data),
-        /// Entry burned.
-        Burned(Data),
-        /// Entry decrypted with the supplied password. Takes precedence over [`Entry::Burned`]. Whether the paste was also burned is recorded in [`Metadata::must_be_deleted`].
-        Encrypted(Data),
+    #[must_use = "a burn-after-reading entry stays in the database until its `burn` is redeemed"]
+    pub struct Entry {
+        /// Decrypted, decompressed content and metadata.
+        pub data: Data,
+        /// Whether the content was decrypted with the supplied password, so it must neither be
+        /// cached nor stored.
+        pub encrypted: bool,
+        /// Present for a burn-after-reading entry. The content may be shown only once
+        /// [`super::Database::burn`] has accepted this.
+        pub burn: Option<Burn>,
     }
+
+    /// The single read of a burn-after-reading entry, redeemed with [`super::Database::burn`].
+    ///
+    /// Reading and deleting are separate steps so that a caller destroys the entry only once it
+    /// has what it is going to show. A render that fails — too large to display, nested too deep,
+    /// a request that timed out — drops the ticket and leaves the entry for another attempt
+    /// rather than taking the one read with it.
+    #[derive(Debug)]
+    #[must_use = "a burn-after-reading entry stays in the database until this is redeemed"]
+    pub struct Burn(pub(super) Id);
 
     /// A simple entry as read from the database for listing purposes.
     #[derive(Debug)]
@@ -696,6 +714,9 @@ impl Database {
     }
 
     /// Get entire entry for `id`.
+    ///
+    /// A burn-after-reading entry is not deleted here; that is [`Self::burn`], with the ticket
+    /// this returns.
     pub async fn get(&self, id: Id, password: Option<Password>) -> Result<read::Entry, Error> {
         let entry = self.call(|result| Command::Get { id, result }).await?;
 
@@ -712,27 +733,28 @@ impl Database {
             .decompress()
             .await?;
 
-        // Whether this fetch burned the paste.
-        let burned = if data.metadata.must_be_deleted {
-            // The delete is what settles the race: readers that arrive together all decrypt
-            // successfully, but only the one that actually removed the row may see the content.
-            // Deleting after decryption keeps a wrong password from burning the entry.
-            if !self.take(id).await? {
-                return Err(Error::NotFound);
-            }
+        // Handed out only after decryption, so a wrong password never gets as far as burning the
+        // entry.
+        let burn = data.metadata.must_be_deleted.then_some(read::Burn(id));
 
-            true
-        } else {
-            false
-        };
-
-        // Password-protected pastes take precedence over burned ones so that callers
-        // can tell that the content must not be cached.
-        Ok(match (is_encrypted, burned) {
-            (true, _) => read::Entry::Encrypted(data),
-            (false, true) => read::Entry::Burned(data),
-            (false, false) => read::Entry::Regular(data),
+        Ok(read::Entry {
+            data,
+            encrypted: is_encrypted,
+            burn,
         })
+    }
+
+    /// Burn the entry `burn` was handed out for.
+    ///
+    /// The delete is what settles the race: readers that arrive together all decrypt
+    /// successfully, but only the one whose burn actually removed the row may show the content.
+    /// Every other one gets [`Error::NotFound`].
+    pub async fn burn(&self, burn: read::Burn) -> Result<(), Error> {
+        if self.take(burn.0).await? {
+            Ok(())
+        } else {
+            Err(Error::NotFound)
+        }
     }
 
     /// Get metadata of a paste.
@@ -800,16 +822,17 @@ mod tests {
 
     use super::*;
 
-    impl read::Entry {
-        /// Unwrap inner data or panic.
-        #[must_use]
-        pub fn unwrap_inner(self) -> read::Data {
-            match self {
-                read::Entry::Regular(data)
-                | read::Entry::Burned(data)
-                | read::Entry::Encrypted(data) => data,
-            }
-        }
+    /// Read `id` and redeem its burn, as a caller about to show the content does.
+    async fn read_and_burn(db: &Database, id: Id) -> Result<read::Data, Error> {
+        let entry = db.get(id, None).await?;
+        db.burn(
+            entry
+                .burn
+                .expect("a burn-after-reading entry hands out a ticket"),
+        )
+        .await?;
+
+        Ok(entry.data)
     }
 
     fn new_db() -> Result<Database, Box<dyn std::error::Error>> {
@@ -830,7 +853,7 @@ mod tests {
 
         let (id, _entry) = db.insert(entry).await?;
 
-        let entry = db.get(id, None).await?.unwrap_inner();
+        let entry = db.get(id, None).await?.data;
         assert_eq!(entry.text, "hello world");
         assert!(entry.metadata.uid.is_some());
         assert_eq!(entry.metadata.uid.unwrap(), 10);
@@ -858,13 +881,13 @@ mod tests {
             let readers = (0..16)
                 .map(|_| {
                     let db = db.clone();
-                    tokio::spawn(async move { db.get(id, None).await })
+                    tokio::spawn(async move { read_and_burn(&db, id).await })
                 })
                 .collect::<Vec<_>>();
 
             let mut served = 0;
             for reader in readers {
-                if let Ok(read::Entry::Burned(data)) = reader.await? {
+                if let Ok(data) = reader.await? {
                     assert_eq!(data.text, "burn me");
                     served += 1;
                 }
@@ -956,7 +979,38 @@ mod tests {
 
         let (id, _entry) = db.insert(entry).await?;
 
-        assert!(matches!(db.get(id, None).await?, read::Entry::Burned(_)));
+        let entry = db.get(id, None).await?;
+        assert_eq!(entry.data.text, "burn me");
+        db.burn(
+            entry
+                .burn
+                .expect("a burn-after-reading entry hands out a ticket"),
+        )
+        .await?;
+        assert!(matches!(db.get(id, None).await, Err(Error::NotFound)));
+
+        Ok(())
+    }
+
+    /// A reader that fails before showing the content — a render too large to display, a request
+    /// that timed out — drops its ticket, and the entry has to survive that for the next attempt.
+    #[tokio::test]
+    async fn an_unredeemed_burn_leaves_the_entry() -> Result<(), Box<dyn std::error::Error>> {
+        let db = new_db()?;
+
+        let entry = write::Entry {
+            text: "burn me".to_string(),
+            burn_after_reading: Some(true),
+            ..Default::default()
+        };
+
+        let (id, _entry) = db.insert(entry).await?;
+
+        let entry = db.get(id, None).await?;
+        assert!(entry.burn.is_some());
+        drop(entry);
+
+        assert_eq!(read_and_burn(&db, id).await?.text, "burn me");
         assert!(matches!(db.get(id, None).await, Err(Error::NotFound)));
 
         Ok(())
@@ -977,25 +1031,21 @@ mod tests {
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..20 {
             let db = db.clone();
-            set.spawn(async move { db.get(id, None).await });
+            set.spawn(async move { read_and_burn(&db, id).await });
         }
 
         let results: Vec<_> = set.join_all().await;
 
-        let (burned, not_found, regular, other) = results.into_iter().fold(
-            (0, 0, 0, 0),
-            |(burned, not_found, regular, other), result| match result {
-                Ok(read::Entry::Burned(_)) => (burned + 1, not_found, regular, other),
-                Err(Error::NotFound) => (burned, not_found + 1, regular, other),
-                Ok(read::Entry::Regular(_) | read::Entry::Encrypted(_)) => {
-                    (burned, not_found, regular + 1, other)
-                }
-                Err(_) => (burned, not_found, regular, other + 1),
+        let (burned, not_found, other) = results.into_iter().fold(
+            (0, 0, 0),
+            |(burned, not_found, other), result| match result {
+                Ok(_) => (burned + 1, not_found, other),
+                Err(Error::NotFound) => (burned, not_found + 1, other),
+                Err(_) => (burned, not_found, other + 1),
             },
         );
         assert_eq!(burned, 1);
         assert_eq!(not_found, 19);
-        assert_eq!(regular, 0);
         assert_eq!(other, 0);
 
         Ok(())
@@ -1115,12 +1165,13 @@ mod tests {
         // Without a password the content stays locked.
         assert!(matches!(db.get(id, None).await, Err(Error::NoPassword)));
 
-        // Encrypted takes precedence over burned, but the burn is still reported.
+        // An encrypted entry can be burning too; the two are reported side by side.
         let entry = db
             .get(id, Some(Password::from("pw".as_bytes().to_vec())))
             .await?;
-        assert!(matches!(entry, read::Entry::Encrypted(_)));
-        assert!(entry.unwrap_inner().metadata.must_be_deleted);
+        assert!(entry.encrypted);
+        assert!(entry.burn.is_some());
+        assert!(entry.data.metadata.must_be_deleted);
 
         Ok(())
     }
