@@ -53,7 +53,7 @@ pub async fn get(
 
 /// Paste view showing the formatted paste as well as a bunch of links.
 #[derive(Template, WebTemplate)]
-#[template(path = "qr.html", escape = "none")]
+#[template(path = "qr.html")]
 pub(crate) struct Qr {
     page: Page,
     theme: Theme,
@@ -96,4 +96,41 @@ pub fn dark_modules(code: &QrCode) -> Vec<(i32, i32)> {
         .flat_map(|x| (0..size).map(move |y| (x, y)))
         .filter(|(x, y)| code.get_module(*x, *y))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::handlers::insert::api::Entry;
+    use crate::test_helpers::{Client, StoreCookies};
+
+    #[tokio::test]
+    async fn title_is_escaped() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            title: Some("<img src=x onerror=alert(1)>".to_string()),
+            ..Default::default()
+        };
+
+        let payload = client
+            .post_json()
+            .json(&entry)
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        let body = client
+            .get(&format!("/qr{}", payload.path))
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        assert!(!body.contains("<img src=x"), "raw markup leaked: {body}");
+        assert!(body.contains("&#60;img src=x"), "body: {body}");
+
+        Ok(())
+    }
 }
