@@ -148,6 +148,12 @@ impl ExpirationSet {
         (self.values, self.default)
     }
 
+    /// The preselected entry, if the set names one.
+    #[must_use]
+    pub fn default(&self) -> Option<Expiration> {
+        self.default
+    }
+
     /// Borrow the sorted values without consuming the set.
     #[must_use]
     pub fn values(&self) -> &[Expiration] {
