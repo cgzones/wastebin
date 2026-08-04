@@ -49,6 +49,14 @@ pub(crate) enum Error {
         "{PASTE_EXPIRATIONS} entry `{0}` is incompatible with {PASTE_MAX_EXPIRATION}: entries must be non-zero and at most the maximum"
     )]
     ExpirationExceedsMax(expiration::Expiration),
+    #[error(
+        "{PASTE_EXPIRATIONS} entry `{0}` cannot be submitted: it exceeds the largest expiration an insert accepts"
+    )]
+    ExpirationNotSubmittable(expiration::Expiration),
+    #[error(
+        "{PASTE_EXPIRATIONS} needs a default entry (`=d`) when {PASTE_MAX_EXPIRATION} is set, or the form cannot be submitted as it renders"
+    )]
+    MissingDefaultExpiration,
     #[error("binding to both TCP and Unix socket is not possible")]
     BothListeners,
     #[error("failed to parse {RATELIMIT_INSERT}: {0}")]
@@ -198,6 +206,16 @@ pub(crate) fn validate_expirations(
     expirations: &expiration::ExpirationSet,
     max_expiration: Option<NonZeroU32>,
 ) -> Result<(), Error> {
+    // Inserting parses the submitted value into a `u32`, so anything above that is offered by the
+    // form and then refused when it is picked. Zero is the "never" entry and is not a duration.
+    for expiration in expirations.values() {
+        let secs = expiration.duration.as_secs();
+
+        if secs != 0 && u32::try_from(secs).is_err() {
+            return Err(Error::ExpirationNotSubmittable(*expiration));
+        }
+    }
+
     let Some(max_expiration) = max_expiration else {
         return Ok(());
     };
@@ -210,6 +228,12 @@ pub(crate) fn validate_expirations(
         if secs == 0 || secs > max_secs {
             return Err(Error::ExpirationExceedsMax(*expiration));
         }
+    }
+
+    // With a maximum set, an absent `expires` field reads as "never" and is refused, so a form
+    // with nothing preselected cannot be submitted as it renders.
+    if expirations.default().is_none() {
+        return Err(Error::MissingDefaultExpiration);
     }
 
     Ok(())
@@ -280,5 +304,35 @@ mod tests {
         let expirations = "0=d,1h,1y".parse::<expiration::ExpirationSet>().unwrap();
 
         assert!(validate_expirations(&expirations, None).is_ok());
+    }
+
+    /// Inserting parses the submitted expiration into a `u32`, so an entry above that is offered
+    /// by the form and then rejected with a 422 when it is picked. `PASTE_MAX_EXPIRATION` already
+    /// refuses to overflow that way; the offered set did not.
+    #[test]
+    fn validate_expirations_rejects_an_unsubmittable_entry() {
+        let expirations = "200y=d".parse::<expiration::ExpirationSet>().unwrap();
+
+        assert!(matches!(
+            validate_expirations(&expirations, None),
+            Err(Error::ExpirationNotSubmittable(_))
+        ));
+    }
+
+    /// With a maximum set, an absent `expires` field reads as "never" and is refused — so a form
+    /// with nothing preselected cannot be submitted as it renders. Requiring a default entry is
+    /// what makes the page's own initial state valid.
+    #[test]
+    fn validate_expirations_requires_a_default_under_a_max() {
+        let expirations = "10m,1h".parse::<expiration::ExpirationSet>().unwrap();
+        let max = NonZeroU32::new(3600).unwrap();
+
+        assert!(matches!(
+            validate_expirations(&expirations, Some(max)),
+            Err(Error::MissingDefaultExpiration)
+        ));
+
+        let with_default = "10m,1h=d".parse::<expiration::ExpirationSet>().unwrap();
+        assert!(validate_expirations(&with_default, Some(max)).is_ok());
     }
 }
