@@ -148,15 +148,19 @@ fn combined_css(color_scheme: &str, theme: &highlighting::Theme) -> Vec<u8> {
     let bg = theme.settings.background.expect("existing color");
 
     format!(
-        "{} {}",
-        format_args!(
-            ":root {{
+        ":root {{
       color-scheme: {color_scheme};
       --main-bg-color: rgb({}, {}, {}, {});
       --main-fg-color: rgb({}, {}, {}, {});
-    }}",
-            bg.r, bg.g, bg.b, bg.a, fg.r, fg.g, fg.b, fg.a
-        ),
+    }} {}",
+        bg.r,
+        bg.g,
+        bg.b,
+        bg.a,
+        fg.r,
+        fg.g,
+        fg.b,
+        fg.a,
         css_for_theme_with_class_style(theme, ClassStyle::Spaced).expect("generating CSS")
     )
     .into_bytes()
