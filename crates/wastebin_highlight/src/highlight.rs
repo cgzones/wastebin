@@ -537,14 +537,27 @@ impl Highlighter {
         // Perl quotes became 49 MB of markup, per request, uncancellable once it has started.
         let mut parse_state = ParseState::new(syntax);
         let mut scope_stack = ScopeStack::new();
-        let mut inner = String::new();
         let mut open_spans: isize = 0;
+
+        let is_safe_token = !token.is_empty()
+            && token
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+
+        // The wrapper depends only on the info string, so open the buffer with it rather than
+        // wrapping afterwards: the block is bounded by `MAX_RENDERED_BYTES` and nothing else, so
+        // that would copy megabytes to prepend a few dozen bytes.
+        let mut html = if is_safe_token {
+            format!(r#"<pre class="code-block language-{token}"><code>"#)
+        } else {
+            String::from(r#"<pre class="code-block"><code>"#)
+        };
 
         let mut budget = Budget::new();
 
         for line in LinesWithEndings::from(text) {
             if budget.skips(line) {
-                escape(line, &mut inner);
+                escape(line, &mut html);
             } else {
                 let parsed = parse_state.parse_line(line, &self.syntax_set)?;
                 let (formatted, delta) = line_tokens_to_classed_spans(
@@ -555,10 +568,10 @@ impl Highlighter {
                 )?;
 
                 open_spans += delta;
-                inner.push_str(&formatted);
+                html.push_str(&formatted);
             }
 
-            if inner.len() > MAX_RENDERED_BYTES {
+            if html.len() > MAX_RENDERED_BYTES {
                 return Err(Error::TooLarge(MAX_RENDERED_BYTES));
             }
 
@@ -567,21 +580,13 @@ impl Highlighter {
 
         // Spans may still be open across the end of the block, or across the point the budget ran
         // out; the block owns them, so close them here rather than letting them escape `</code>`.
-        inner.extend(std::iter::repeat_n(
+        html.extend(std::iter::repeat_n(
             "</span>",
             open_spans.max(0).unsigned_abs(),
         ));
-        let is_safe_token = !token.is_empty()
-            && token
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-        let class = if is_safe_token {
-            format!("code-block language-{token}")
-        } else {
-            String::from("code-block")
-        };
+        html.push_str("</code></pre>");
 
-        Ok(format!("<pre class=\"{class}\"><code>{inner}</code></pre>"))
+        Ok(html)
     }
 
     /// Return iterator over all available [`Syntax`]es with their canonical name and usual file
