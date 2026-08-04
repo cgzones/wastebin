@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use askama::Template;
-use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, FromRef, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
@@ -11,7 +10,7 @@ use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Theme, Uids, can_delete, verify_owner_token};
-use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read};
+use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read, render_sized};
 use crate::handlers::{PasswordRatelimit, uid_cookie};
 use crate::i18n::Lang;
 use crate::{AppState, Page};
@@ -41,7 +40,10 @@ pub(crate) struct PasteForm {
 }
 
 /// Paste view showing the formatted paste.
-#[derive(Template, WebTemplate)]
+///
+/// Responds through [`render_sized`] rather than deriving `WebTemplate`, so the page is built in
+/// a buffer sized for the document it carries.
+#[derive(Template)]
 #[template(path = "formatted.html")]
 pub(crate) struct Paste {
     page: Page,
@@ -177,7 +179,7 @@ pub async fn get(
             title,
         };
 
-        Ok(paste.into_response())
+        Ok(render_sized(&paste, paste.html.len()))
     }
     .await
     .map_err(|err| chrome.error(err))

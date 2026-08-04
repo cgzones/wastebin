@@ -1,15 +1,14 @@
 use std::sync::Arc;
 
 use askama::Template;
-use askama_web::WebTemplate;
 use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Path, State};
-use axum::response::{IntoResponse, Response};
+use axum::response::Response;
 
 use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasteForm;
-use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read};
+use crate::handlers::html::{Chrome, ErrorResponse, PasteReader, PasteView, Read, render_sized};
 use crate::i18n::Lang;
 use crate::{Cache, Database, Highlighter, Page};
 use wastebin_core::db::read::Metadata;
@@ -17,7 +16,10 @@ use wastebin_core::expiration::Expiration;
 use wastebin_highlight::markdown;
 
 /// Page showing a Markdown paste rendered as HTML.
-#[derive(Template, WebTemplate)]
+///
+/// Responds through [`render_sized`] rather than deriving `WebTemplate`, so the page is built in
+/// a buffer sized for the document it carries.
+#[derive(Template)]
 #[template(path = "rendered.html")]
 pub(crate) struct Rendered {
     page: Page,
@@ -101,7 +103,7 @@ pub async fn get(
             title,
         };
 
-        Ok(rendered.into_response())
+        Ok(render_sized(&rendered, rendered.html.len()))
     }
     .await
     .map_err(|err| chrome.error(err))
