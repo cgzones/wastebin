@@ -2,7 +2,7 @@ use axum::Json;
 use axum::http::StatusCode;
 use serde::Serialize;
 
-use wastebin_core::{crypto, db, id};
+use wastebin_core::{db, id};
 
 #[derive(thiserror::Error, Debug)]
 pub(crate) enum Error {
@@ -44,10 +44,9 @@ impl From<Error> for StatusCode {
     fn from(err: Error) -> Self {
         match err {
             Error::Database(db::Error::NotFound) => StatusCode::NOT_FOUND,
-            Error::Database(
-                db::Error::Delete | db::Error::Crypto(crypto::Error::ChaCha20Poly1305Decrypt),
-            )
-            | Error::MissingUid => StatusCode::FORBIDDEN,
+            Error::Database(db::Error::Delete | db::Error::WrongPassword) | Error::MissingUid => {
+                StatusCode::FORBIDDEN
+            }
             Error::RateLimit => StatusCode::TOO_MANY_REQUESTS,
             Error::Database(db::Error::NoPassword)
             | Error::Id(_)

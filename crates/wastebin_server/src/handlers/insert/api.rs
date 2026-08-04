@@ -309,4 +309,40 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn read_encrypted_with_wrong_password() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            password: Some("SuperSecretPassword".to_string()),
+            ..Default::default()
+        };
+
+        let res = client.post_json().json(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let payload = res.json::<super::RedirectResponse>().await?;
+
+        // A wrong password is a rejected request, not an internal error.
+        let res = client
+            .get(&format!("/raw{}", payload.path))
+            .header(PASSWORD_HEADER_NAME, "WrongPassword")
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert!(!res.text().await?.contains("FooBarBaz"));
+
+        // Omitting it entirely is a different outcome: the password prompt, not the content.
+        let res = client.get(&format!("/raw{}", payload.path)).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let body = res.text().await?;
+        assert!(body.contains(r#"type="password""#), "body: {body}");
+        assert!(!body.contains("FooBarBaz"));
+
+        Ok(())
+    }
 }

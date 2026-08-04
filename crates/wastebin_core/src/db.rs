@@ -12,29 +12,45 @@ use crate::expiration::Expiration;
 use crate::id::Id;
 use read::{DatabaseEntry, ListEntry, Metadata};
 
-/// Database related errors.
+/// Failures when opening the database, i.e. only at startup and never while serving a request.
 #[derive(thiserror::Error, Debug)]
-pub enum Error {
-    #[error("not allowed to delete")]
-    Delete,
+pub enum OpenError {
     #[error("sqlite error: {0}")]
-    Sqlite(rusqlite::Error),
+    Sqlite(#[from] rusqlite::Error),
     #[error("migrations error: {0}")]
     Migration(#[from] rusqlite_migration::Error),
-    #[error("failed to compress: {0}")]
-    Compression(String),
-    #[error("password not given")]
-    NoPassword,
+}
+
+/// Failures of an individual database operation.
+#[derive(thiserror::Error, Debug)]
+pub enum Error {
+    // Outcomes the caller is expected to act on.
     #[error("entry not found")]
     NotFound,
+    #[error("not allowed to delete")]
+    Delete,
+    #[error("password not given")]
+    NoPassword,
+    #[error("wrong password")]
+    WrongPassword,
+
+    // Everything below means the request failed for reasons the caller cannot resolve.
+    #[error("sqlite error: {0}")]
+    Sqlite(rusqlite::Error),
+    #[error("failed to compress: {0}")]
+    Compression(String),
     #[error("join error: {0}")]
     Join(#[from] tokio::task::JoinError),
     #[error("crypto error: {0}")]
     Crypto(#[from] crypto::Error),
-    #[error("failed to send command to channel")]
-    SendError,
-    #[error("failed to send result: {0}")]
-    ResultRecvError(#[from] oneshot::error::RecvError),
+    #[error("database handler is gone")]
+    BackendGone,
+}
+
+impl From<oneshot::error::RecvError> for Error {
+    fn from(_: oneshot::error::RecvError) -> Self {
+        Error::BackendGone
+    }
 }
 
 /// The programmatic database interface. However, database calls are not translated directly to
@@ -321,7 +337,14 @@ pub mod read {
                 }),
                 (Some(nonce), Some(password)) => {
                     let encrypted = Encrypted::new(self.data, nonce);
-                    let decrypted = encrypted.decrypt(password, salt.clone()).await?;
+                    // A failing AEAD check means the supplied password was wrong; surface that as
+                    // an outcome rather than leaking a cipher primitive failure to callers.
+                    let decrypted = encrypted.decrypt(password, salt.clone()).await.map_err(
+                        |err| match err {
+                            crate::crypto::Error::ChaCha20Poly1305Decrypt => Error::WrongPassword,
+                            err => Error::Crypto(err),
+                        },
+                    )?;
                     Ok(CompressedReadEntry {
                         data: decrypted,
                         metadata: self.metadata,
@@ -364,7 +387,7 @@ impl From<rusqlite::Error> for Error {
 
 impl Handler {
     /// Create new database with the given `method`.
-    fn new(method: Open, receiver: kanal::Receiver<Command>) -> Result<Self, Error> {
+    fn new(method: Open, receiver: kanal::Receiver<Command>) -> Result<Self, OpenError> {
         tracing::debug!("opening {method:?}");
 
         let mut conn = match method {
@@ -415,11 +438,12 @@ impl Handler {
     }
 
     /// Run database command loop.
-    fn run(mut self) -> Result<(), Error> {
+    fn run(mut self) {
         loop {
             let command = match self.receiver.recv() {
                 Ok(command) => command,
-                Err(kanal::ReceiveError::Closed | kanal::ReceiveError::SendClosed) => return Ok(()), // sender closed, application is shutting down..
+                // sender closed, application is shutting down..
+                Err(kanal::ReceiveError::Closed | kanal::ReceiveError::SendClosed) => return,
             };
 
             match command {
@@ -616,11 +640,17 @@ impl Database {
     pub fn new(
         method: Open,
         salt: Salt,
-    ) -> Result<(Self, impl Future<Output = Result<(), Error>>), Error> {
+    ) -> Result<
+        (
+            Self,
+            impl Future<Output = Result<(), tokio::task::JoinError>>,
+        ),
+        OpenError,
+    > {
         let (sender, receiver) = kanal::bounded(256);
         let sender = sender.to_async();
         let handler = Handler::new(method, receiver)?;
-        let fut = async move { tokio::task::spawn_blocking(|| handler.run()).await? };
+        let fut = async move { tokio::task::spawn_blocking(|| handler.run()).await };
         Ok((Self { sender, salt }, fut))
     }
 
@@ -633,7 +663,7 @@ impl Database {
         self.sender
             .send(command(result))
             .await
-            .map_err(|_| Error::SendError)?;
+            .map_err(|_| Error::BackendGone)?;
 
         command_result.await?
     }
@@ -793,7 +823,7 @@ mod tests {
         db.sender
             .send(Command::NextUid { result })
             .await
-            .map_err(|_| Error::SendError)?;
+            .map_err(|_| Error::BackendGone)?;
 
         // The handler must keep serving everyone else.
         assert!(db.next_uid().await.is_ok());
