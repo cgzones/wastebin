@@ -40,8 +40,11 @@ pub(crate) enum Mode {
     Rendered,
 }
 
-/// Cache slot: a paste identity paired with the representation it holds.
-type Slot = (Key, Mode);
+/// Cache slot: a paste, the syntax its source view was rendered with, and the representation held.
+///
+/// The syntax rather than the extension that named it, since that is what the render actually
+/// depended on; [`None`] for a rendered document, which depended on neither.
+type Slot = (Id, Option<wastebin_highlight::SyntaxKey>, Mode);
 
 /// The LRU behind [`Cache`], absent when caching is disabled.
 type Store = Option<Arc<Mutex<LruCache<Slot, Arc<String>>>>>;
@@ -85,18 +88,22 @@ impl Cache {
 
     /// Build the slot `key` occupies.
     ///
-    /// Extensions the highlighter does not recognise all render as plain text, so they describe
-    /// the same document and share one slot. Keeping them apart would let a single paste occupy
-    /// the whole cache: the extension is caller-supplied and unbounded in variety, so
+    /// Keyed on the syntax the extension resolves to, not on the extension itself, because that is
+    /// all the source view's output ever depended on. Every spelling of one syntax therefore shares
+    /// a slot — `md`, `markdown` and `mdown`, and equally the several hundred extensions that name
+    /// no syntax and so all render as plain text. Keeping them apart would let a single paste
+    /// occupy the whole cache: the extension is caller-supplied and unbounded in variety, so
     /// `/{id}.a`, `/{id}.b`, … would each be a miss, a fresh render and an eviction.
+    ///
+    /// A rendered document does not depend on the extension at all — `markdown::render` is never
+    /// told one — so it carries no syntax here.
     fn slot(&self, key: &Key, mode: Mode) -> Slot {
-        let ext = key
-            .ext
-            .as_deref()
-            .filter(|ext| self.highlighter.knows_extension(ext))
-            .map(ToOwned::to_owned);
+        let syntax = match mode {
+            Mode::Rendered => None,
+            Mode::Source => Some(self.highlighter.syntax_key(key.ext.as_deref())),
+        };
 
-        (Key { id: key.id, ext }, mode)
+        (key.id, syntax, mode)
     }
 
     pub fn put(&self, key: &Key, mode: Mode, value: Arc<String>) {
@@ -104,8 +111,13 @@ impl Cache {
             return;
         };
 
+        // Resolved before taking the lock: `slot` walks the syntax set, which is far more work
+        // than the lookup it feeds and would otherwise stretch a process-wide critical section
+        // every source view passes through.
+        let slot = self.slot(key, mode);
+
         let mut cache = inner.lock().expect("getting lock");
-        cache.cache_set(self.slot(key, mode), value);
+        cache.cache_set(slot, value);
 
         // Entries are bounded by count as well, but a rendered document has no size limit of its
         // own: a paste of newlines expands into tens of megabytes of line markup, and a hundred
@@ -118,7 +130,7 @@ impl Cache {
         let mut total = cached_bytes(&cache);
 
         while total > self.max_bytes {
-            let Some(oldest) = cache.key_order().last().cloned() else {
+            let Some(oldest) = cache.key_order().last().copied() else {
                 break;
             };
 
@@ -129,11 +141,16 @@ impl Cache {
 
     #[must_use]
     pub fn get(&self, key: &Key, mode: Mode) -> Option<Arc<String>> {
-        self.inner
-            .as_ref()?
+        let inner = self.inner.as_ref()?;
+
+        // Resolved before the lock, as in `put`: the receiver of `cache_get` — and so `.lock()` —
+        // is evaluated before its argument, which would put the syntax walk inside the section.
+        let slot = self.slot(key, mode);
+
+        inner
             .lock()
             .expect("getting lock")
-            .cache_get(&self.slot(key, mode))
+            .cache_get(&slot)
             .map(Arc::clone)
     }
 }
@@ -351,6 +368,86 @@ mod tests {
         }
 
         // A real syntax is a different render and keeps its own slot.
+        let known = Key {
+            id,
+            ext: Some("rs".to_string()),
+        };
+        assert!(cache.get(&known, Mode::Source).is_none());
+    }
+
+    /// The source view's output depends on the syntax, not on which of its extensions named it, so
+    /// every spelling of one syntax describes the same document. Keying on the extension gave
+    /// `md`, `markdown` and `mdown` a slot each, holding byte-identical HTML; 102 of the 213
+    /// syntaxes list more than one extension, so this was the common case, not a corner of it.
+    #[test]
+    fn extensions_naming_one_syntax_share_a_slot() {
+        let cache = test_cache(NonZeroUsize::new(128), 1024);
+        let id = Id::from(104_651_828_u32);
+
+        let stored = Key {
+            id,
+            ext: Some("md".to_string()),
+        };
+        cache.put(
+            &stored,
+            Mode::Source,
+            Arc::new(String::from("rendered as markdown")),
+        );
+
+        for ext in ["markdown", "mdown"] {
+            let probe = Key {
+                id,
+                ext: Some(ext.to_string()),
+            };
+            assert_eq!(
+                cache
+                    .get(&probe, Mode::Source)
+                    .as_deref()
+                    .map(String::as_str),
+                Some("rendered as markdown"),
+                "{ext} did not share markdown's slot",
+            );
+        }
+
+        // A different syntax is a different render and keeps its own slot.
+        let other = Key {
+            id,
+            ext: Some("rs".to_string()),
+        };
+        assert!(cache.get(&other, Mode::Source).is_none());
+    }
+
+    /// A rendered document is Markdown either way — `markdown::render` never sees the extension —
+    /// so every known extension took a slot holding byte-identical HTML. With 586 of them against
+    /// a 128-entry cache, one paste fetched under varying extensions evicted everything else and
+    /// paid for a full render each time.
+    #[test]
+    fn one_paste_holds_one_rendered_slot() {
+        let cache = test_cache(NonZeroUsize::new(128), 1024);
+        let id = Id::from(104_651_828_u32);
+
+        let stored = Key {
+            id,
+            ext: Some("md".to_string()),
+        };
+        cache.put(
+            &stored,
+            Mode::Rendered,
+            Arc::new(String::from("<h1>x</h1>")),
+        );
+
+        for ext in [None, Some("rs".to_string()), Some("py".to_string())] {
+            let probe = Key { id, ext };
+            assert_eq!(
+                cache
+                    .get(&probe, Mode::Rendered)
+                    .as_deref()
+                    .map(String::as_str),
+                Some("<h1>x</h1>"),
+            );
+        }
+
+        // The source view does depend on the extension, so it keeps a slot per syntax.
         let known = Key {
             id,
             ext: Some("rs".to_string()),
