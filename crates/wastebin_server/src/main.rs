@@ -9,6 +9,8 @@ mod render;
 #[cfg(test)]
 mod test_helpers;
 
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +26,7 @@ use http::header::{
     WWW_AUTHENTICATE, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
-use tokio::net::{TcpListener, UnixListener};
+use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::timeout::TimeoutLayer;
@@ -380,6 +382,50 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .layer(from_fn(answer_options))
 }
 
+/// Access mode for a Unix socket this process creates.
+///
+/// Connecting to a Unix socket needs write permission on it, so the mode is what decides who may
+/// reach the server. Left to the umask it is whatever the service manager happened to set — `0777`
+/// under a umask of zero. Owner and group, so a reverse proxy is let in by sharing the group
+/// rather than by the socket standing open to every local account.
+const SOCKET_MODE: u32 = 0o660;
+
+/// Bind the Unix socket at `path`, clearing a socket left behind by an earlier run.
+///
+/// Neither a graceful shutdown nor a crash can be relied on to unlink the socket file, and
+/// `bind` refuses a path that still exists: without this the *second* start of the same service
+/// fails with `EADDRINUSE`, so a restart never comes back. Only a socket nothing answers on is
+/// removed — one with a live listener means another instance owns the path, and anything that is
+/// not a socket is the operator's file rather than ours.
+async fn bind_unix_socket(path: &Path) -> std::io::Result<UnixListener> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => {
+            if UnixStream::connect(path).await.is_ok() {
+                return Err(std::io::Error::other(format!(
+                    "{} is already served by a running instance",
+                    path.display()
+                )));
+            }
+
+            tracing::info!("removing stale socket {}", path.display());
+            std::fs::remove_file(path)?;
+        }
+        Ok(_) => {
+            return Err(std::io::Error::other(format!(
+                "{} exists and is not a socket",
+                path.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    let listener = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
+
+    Ok(listener)
+}
+
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
@@ -452,10 +498,14 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             env::SocketType::Unix(path) => {
-                let listener = UnixListener::bind(path)?;
+                let listener = bind_unix_socket(&path).await?;
                 axum::serve(listener, app)
                     .with_graceful_shutdown(shutdown_signal())
                     .await?;
+
+                if let Err(err) = std::fs::remove_file(&path) {
+                    tracing::warn!("could not remove socket {}: {err}", path.display());
+                }
             }
         }
 

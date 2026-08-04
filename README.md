@@ -196,7 +196,7 @@ run-time behavior:
 | `WASTEBIN_SIGNING_KEY`            | Key to sign cookies. Must be at least 64 bytes long.          | Random key generated at startup, i.e. cookies will become invalid after restarts and paste creators will not be able to delete their pastes. |
 | `WASTEBIN_THEME`                  | Theme colors, one of `ayu`, `base16ocean`, `catppuccin`, `coldark`, `gruvbox`, `monokai`, `onehalf`, `solarized`. See [this page](https://matze.github.io/wastebin/) for a preview. | `ayu` |
 | `WASTEBIN_TITLE`                  | HTML page title.                                              | `wastebin`            |
-| `WASTEBIN_UNIX_SOCKET_PATH`       | Path to a Unix socket to accept connections from.             |                       |
+| `WASTEBIN_UNIX_SOCKET_PATH`       | Path to a Unix socket to accept connections from. The socket is created with mode `0660`, so a reverse proxy needs to run as the same user or share its group. |                       |
 | `WASTEBIN_RATELIMIT_INSERT`       | Maximum allowed creation amount of new pastes per second, process-wide across all clients. | `0` (disabled)        |
 | `WASTEBIN_RATELIMIT_DELETE`       | Maximum allowed delete attempts of existing pastes per second, process-wide across all clients. | `0` (disabled)       |
 | `WASTEBIN_RATELIMIT_PASSWORD`     | Maximum allowed password attempts on encrypted pastes per second, process-wide across all clients. Each attempt costs a full argon2 derivation, so this bounds what an anonymous caller can make the server spend. | `0` (disabled) |
