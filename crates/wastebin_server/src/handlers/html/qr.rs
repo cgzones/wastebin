@@ -27,7 +27,7 @@ pub async fn get(
 ) -> Result<Qr, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
-        let code = code_for(&page, id).await?;
+        let code = code_for(&page, &key).await?;
 
         let Metadata {
             uid: owner_uid,
@@ -81,18 +81,35 @@ impl Qr {
     }
 }
 
-pub fn code_from(url: &Url, id: &str) -> Result<QrCode, Error> {
+/// Build the absolute URL of `key` under `base`.
+///
+/// Joining the path onto the base parses it as a relative reference, and one whose first segment
+/// holds a colon is an absolute URI instead — the extension is caller-supplied and unvalidated, so
+/// `{id}.x://evil.example.com` replaced the authority outright and the code on a trusted page
+/// pointed wherever the caller chose. Pushing a segment can only ever extend the base's path.
+fn paste_url(base: &Url, key: &Key) -> Result<Url, Error> {
+    let mut url = base.clone();
+
+    url.path_segments_mut()
+        .map_err(|()| url::ParseError::RelativeUrlWithCannotBeABaseBase)?
+        .push(&key.to_string());
+
+    Ok(url)
+}
+
+pub fn code_from(url: &Url, key: &Key) -> Result<QrCode, Error> {
     Ok(QrCode::encode_text(
-        url.join(id)?.as_str(),
+        paste_url(url, key)?.as_str(),
         qrcodegen::QrCodeEcc::High,
     )?)
 }
 
-/// Encode the QR code for `id` off the async runtime.
-pub async fn code_for(page: &Page, id: String) -> Result<QrCode, Error> {
+/// Encode the QR code for `key` off the async runtime.
+pub async fn code_for(page: &Page, key: &Key) -> Result<QrCode, Error> {
     let page = page.clone();
+    let key = key.clone();
 
-    tokio::task::spawn_blocking(move || code_from(&page.base_url, &id))
+    tokio::task::spawn_blocking(move || code_from(&page.base_url, &key))
         .await
         .map_err(Error::from)?
 }
@@ -108,8 +125,58 @@ pub fn dark_modules(code: &QrCode) -> Vec<(i32, i32)> {
 
 #[cfg(test)]
 mod tests {
+    use super::paste_url;
+    use crate::cache::Key;
     use crate::handlers::insert::api::Entry;
     use crate::test_helpers::{Client, StoreCookies};
+    use reqwest::StatusCode;
+
+    /// The QR was built by joining the raw path onto the base URL, and a relative reference whose
+    /// first segment holds a colon parses as an absolute URI — `{id}.x://evil.example.com` became
+    /// exactly that. The code shown on a trusted page then pointed wherever the caller chose, and
+    /// `/burn/` reaches this without a paste existing at all.
+    #[test]
+    fn a_scheme_in_the_extension_cannot_steer_the_code() {
+        let base = url::Url::parse("https://paste.example.com/").unwrap();
+
+        for ext in [
+            "x://evil.example.com",
+            "x:evil",
+            "./../../evil",
+            "a/b",
+            "%2e%2e%2fevil",
+        ] {
+            let key = Key {
+                id: wastebin_core::id::Id::from(104_651_828_u32),
+                ext: Some(ext.to_string()),
+            };
+
+            let url = paste_url(&base, &key).unwrap();
+
+            assert_eq!(url.host_str(), Some("paste.example.com"), "ext {ext:?}");
+            assert_eq!(url.scheme(), "https", "ext {ext:?}");
+            assert!(
+                url.as_str().starts_with("https://paste.example.com/"),
+                "ext {ext:?} produced {url}"
+            );
+        }
+    }
+
+    /// An extension too long for a QR code is the caller's doing, so it is a bad request rather
+    /// than an internal error — and it must not read as the server having broken.
+    #[tokio::test]
+    async fn an_unencodable_extension_is_a_bad_request() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let res = client
+            .get(&format!("/burn/aaaaaaaaaaa.{}", "a".repeat(4096)))
+            .send()
+            .await?;
+
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn title_is_escaped() -> Result<(), Box<dyn std::error::Error>> {

@@ -70,6 +70,7 @@ impl Error {
             Error::EmptyPaste => "error.empty_paste",
             Error::RateLimit => "error.rate_limit",
             Error::TooLongExpires => "error.too_long_expires",
+            Error::QrCode(_) => "error.qr_too_long",
             Error::MalformedForm => "error.malformed_form",
             Error::BurnNotConfirmed => "error.burn_not_confirmed",
             Error::PayloadTooLarge => "error.payload_too_large",
@@ -82,7 +83,6 @@ impl Error {
                 "error.render_too_large"
             }
             Error::Join(_)
-            | Error::QrCode(_)
             | Error::Database(_)
             | Error::Abandoned
             | Error::RendererGone
@@ -133,12 +133,12 @@ impl From<&Error> for StatusCode {
                 | wastebin_highlight::Error::TooLarge(_),
             ) => StatusCode::BAD_REQUEST,
             Error::BurnNotConfirmed => StatusCode::FORBIDDEN,
+            Error::QrCode(_) => StatusCode::BAD_REQUEST,
             Error::MalformedForm => StatusCode::UNPROCESSABLE_ENTITY,
             Error::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Error::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Error::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
             Error::Join(_)
-            | Error::QrCode(_)
             | Error::Database(_)
             | Error::Abandoned
             | Error::RendererGone
