@@ -356,8 +356,11 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
                     timeout,
                 ))
                 .layer(CompressionLayer::new())
-                .layer(from_fn_with_state(state.clone(), handle_service_errors))
-                .layer(from_fn(security_headers_layer)),
+                // Outside `handle_service_errors`, which answers by building a fresh page rather
+                // than by amending the one it was handed: inside, every header added here was
+                // dropped again for exactly the statuses that layer renders.
+                .layer(from_fn(security_headers_layer))
+                .layer(from_fn_with_state(state.clone(), handle_service_errors)),
         )
         .with_state(state);
 
@@ -514,6 +517,61 @@ mod tests {
 
             assert!(vary.contains("cookie"), "path {path} vary: {vary}");
             assert!(vary.contains("accept-language"), "path {path} vary: {vary}");
+        }
+
+        Ok(())
+    }
+
+    /// `handle_service_errors` replaces the response it was handed, so with it wrapped around the
+    /// header layer every header that layer had added went out the window — leaving the three
+    /// statuses it renders framable, sniffable and storable, and making "one layer owns every
+    /// security header" untrue for exactly the responses least likely to be looked at.
+    #[tokio::test]
+    async fn rewritten_errors_keep_their_security_headers() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        // 413 from the body limit, 415 from the content type, 405 from the method.
+        let too_large = client
+            .post_json()
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body("x".repeat(2 * 1024 * 1024))
+            .send()
+            .await?;
+        assert_eq!(too_large.status(), http::StatusCode::PAYLOAD_TOO_LARGE);
+
+        let wrong_type = client
+            .post_json()
+            .header(http::header::CONTENT_TYPE, "application/xml")
+            .body("<x/>")
+            .send()
+            .await?;
+        assert_eq!(
+            wrong_type.status(),
+            http::StatusCode::UNSUPPORTED_MEDIA_TYPE
+        );
+
+        let wrong_method = client.get("/theme").send().await?;
+        assert_eq!(wrong_method.status(), http::StatusCode::METHOD_NOT_ALLOWED);
+
+        for (name, res) in [
+            ("413", too_large),
+            ("415", wrong_type),
+            ("405", wrong_method),
+        ] {
+            let headers = res.headers();
+
+            for header in [
+                http::header::CONTENT_SECURITY_POLICY,
+                http::header::X_CONTENT_TYPE_OPTIONS,
+                X_FRAME_OPTIONS,
+                http::header::CACHE_CONTROL,
+            ] {
+                assert!(
+                    headers.contains_key(&header),
+                    "{name} is missing {header}: {headers:?}"
+                );
+            }
         }
 
         Ok(())
