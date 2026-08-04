@@ -16,10 +16,15 @@ function highlightLines(scroll) {
   const match = window.location.hash.match(/^#L(\d+)(?:-L(\d+))?$/);
   if (!match) return;
 
+  // The range comes from the URL, so clamp it to the lines that exist rather than
+  // looping over whatever number the fragment names.
+  const lineCount = document.querySelectorAll('#line-numbers > div').length;
+  if (lineCount === 0) return;
+
   const a = parseInt(match[1], 10);
   const b = match[2] ? parseInt(match[2], 10) : a;
-  const from = Math.min(a, b);
-  const to = Math.max(a, b);
+  const from = Math.max(Math.min(a, b), 1);
+  const to = Math.min(Math.max(a, b), lineCount);
 
   for (let i = from; i <= to; i++) {
     const lnDiv = document.getElementById('L' + i);
