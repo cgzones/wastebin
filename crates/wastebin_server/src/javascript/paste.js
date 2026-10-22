@@ -169,8 +169,33 @@ function syncLineNumbers() {
   const lineHeight = parseFloat(getComputedStyle(codeContainer).lineHeight);
   if (!lineHeight) return;
 
-  for (let i = 0; i < codeRows.length && i < numberRows.length; i++) {
-    numberRows[i].style.setProperty('--rows', codeRows[i].getBoundingClientRect().height / lineHeight);
+  // Measure every row before setting any cell: a write between two reads makes
+  // the next read lay the whole page out again, which froze the browser for
+  // seconds on a paste of a few thousand lines.
+  const count = Math.min(codeRows.length, numberRows.length);
+  const heights = new Array(count);
+  for (let i = 0; i < count; i++) {
+    heights[i] = codeRows[i].getBoundingClientRect().height;
+  }
+
+  // A row is a whole number of lines, and a cell spanning as many of its own
+  // lines matches it exactly. A size taken from the measurement does not: the
+  // computed line height is rounded to a hundredth of a pixel, and a height
+  // measured far down the page has lost precision, so cells sized either way
+  // ended up tens to hundreds of pixels from their lines on a long paste. Only
+  // a row that is no whole number of lines — a fallback font can make one
+  // taller — gets its measured height.
+  for (let i = 0; i < count; i++) {
+    const lines = heights[i] / lineHeight;
+    const whole = Math.round(lines);
+    const cell = numberRows[i].style;
+
+    if (whole >= 1 && Math.abs(lines - whole) < 0.05) {
+      cell.setProperty('--rows', whole);
+      cell.removeProperty('height');
+    } else {
+      cell.height = heights[i] + 'px';
+    }
   }
 }
 
