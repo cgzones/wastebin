@@ -137,17 +137,24 @@ function formatSize(bytes) {
 
 $("progress-limit").textContent = LABEL_LIMIT + " " + formatSize(MAX_BYTES);
 
-function updateStats() {
-  const text = textarea.value;
-  const lines = Math.max(1, text.split("\n").length);
-  const chars = text.length;
-  let bytes;
-  try { bytes = new Blob([text]).size; } catch(e) { bytes = text.length; }
+const form = $("form");
 
-  $("stat-lines").textContent = lines;
-  $("stat-chars").textContent = chars;
-  $("stat-bytes").textContent = bytes.toLocaleString();
+// The limit applies to the request body, which is the whole form URL-encoded rather than the text
+// alone: reserved and non-ASCII bytes take three bytes each, and every line break goes out as
+// CRLF, i.e. `%0D%0A`. Counting the text's own bytes put 400,000 `&` at 391 KB of a 1 MiB limit
+// whose request they broke.
+function requestSize() {
+  const params = new URLSearchParams();
+  for (const [name, value] of new FormData(form)) {
+    if (typeof value === "string") {
+      params.append(name, value.replace(/\r\n|\r|\n/g, "\r\n"));
+    }
+  }
+  return params.toString().length;
+}
 
+function updateSize() {
+  const bytes = requestSize();
   const pct = Math.min(100, (bytes / MAX_BYTES) * 100);
   const fill = $("progress-fill");
   fill.style.width = pct + "%";
@@ -159,7 +166,27 @@ function updateStats() {
   $("progress-kb").textContent = (bytes / 1024).toFixed(1) + " " + UNIT_KB;
 }
 
-textarea.addEventListener("input", updateStats);
+let sizeTimer;
+
+function updateStats() {
+  const text = textarea.value;
+  const lines = Math.max(1, text.split("\n").length);
+  const chars = text.length;
+  let bytes;
+  try { bytes = new Blob([text]).size; } catch(e) { bytes = text.length; }
+
+  $("stat-lines").textContent = lines;
+  $("stat-chars").textContent = chars;
+  $("stat-bytes").textContent = bytes.toLocaleString();
+
+  // Encoding the whole form is linear in the text, so it waits for typing to pause.
+  clearTimeout(sizeTimer);
+  sizeTimer = setTimeout(updateSize, 150);
+}
+
+// Every field is part of the request, so a title, a password or an option changes its size too.
+form.addEventListener("input", updateStats);
+form.addEventListener("change", updateStats);
 updateStats();
 
 const langSelect = $("langs");
@@ -240,7 +267,6 @@ function loadFile(file) {
   file.text().then(function(value) {
     textarea.value = value;
     updateLineNumbers();
-    updateStats();
 
     // Infer extension from filename
     const name = file.name || "";
@@ -259,6 +285,9 @@ function loadFile(file) {
 
     // Set title to filename
     $("title").value = file.name;
+
+    // After every field it sets, since all of them count towards the request.
+    updateStats();
   });
 }
 
@@ -305,7 +334,6 @@ function removeIndent() {
 // `submit()` skips constraint validation, so a shortcut sent an empty paste to the server and got
 // its error page back; `requestSubmit()` checks the form exactly as the Paste button does.
 function submitForm() {
-  const form = $("form");
   if (form.requestSubmit) {
     form.requestSubmit();
   } else if (form.reportValidity()) {
