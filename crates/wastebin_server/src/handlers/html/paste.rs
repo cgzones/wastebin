@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Theme, Uids, can_delete, verify_owner_token};
 use crate::handlers::html::{
-    Chrome, ErrorResponse, FormAction, PasteReader, PasteView, render_sized,
+    Chrome, ErrorResponse, FormAction, PasteReader, PasteView, form_body, render_sized,
 };
 use crate::handlers::{PasswordRatelimit, uid_cookie};
 use crate::i18n::Lang;
@@ -118,16 +118,8 @@ pub async fn get(
     }
 
     async {
-        // `Form` reads the query string on GET and HEAD, so `?password=` unlocked the paste — and
-        // put the password into browser history, bookmarks, the same-origin `Referer` and every
-        // proxy log on the way. That is exactly what the `Password` extractor refuses for `/raw`;
-        // the prompt posts, so a request body still carries one. `?confirm_burn=1` is the same
-        // story: set by anything that merely follows a link, so an `<img>` or a prefetch burnt the
-        // paste. Dropping the whole form for those methods covers both fields at once.
-        let form = form
-            .ok()
-            .map(|Form(form)| form)
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
+        // Never from the query string: the prompt posts, so a request body still carries one.
+        let form = form_body(&method, form)?;
         // This route is also every single-segment path no other route claimed, so a value that is
         // not an identifier is a mistyped address rather than a malformed one. `/about` reading as
         // "that is not a valid paste identifier" described a paste the visitor never asked for.
@@ -407,6 +399,37 @@ mod tests {
             .text()
             .await?;
         assert!(body.contains("SECRETPAYLOAD"), "body: {body}");
+
+        Ok(())
+    }
+
+    /// Dropping every form rejection as "no form" also dropped the body limit's, so an oversized
+    /// password submission was answered with the prompt again and a 200, as if it had never
+    /// arrived — while `/new` calls the same body too large.
+    #[tokio::test]
+    async fn an_oversized_password_form_is_too_large() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            password: String::from("hunter2"),
+            ..crate::test_helpers::some_entry()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        // `make_app` is given a 1 MiB limit by the test harness.
+        let res = client
+            .post(&location)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                "application/x-www-form-urlencoded",
+            )
+            .body("x".repeat(2 * 1024 * 1024))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        // No paste was sent here, so the page must not say one was too large.
+        let body = res.text().await?;
+        assert!(body.contains("The request is larger"), "{body}");
 
         Ok(())
     }

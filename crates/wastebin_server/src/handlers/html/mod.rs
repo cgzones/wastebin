@@ -10,7 +10,8 @@ use std::sync::Arc;
 
 use askama::Template;
 use askama_web::WebTemplate;
-use axum::extract::{FromRef, FromRequestParts};
+use axum::extract::rejection::FormRejection;
+use axum::extract::{Form, FromRef, FromRequestParts};
 use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
@@ -28,6 +29,33 @@ use wastebin_core::db;
 use wastebin_core::db::Database;
 use wastebin_core::db::read::{Data, Entry, Metadata};
 use wastebin_highlight::Html;
+
+/// The form body a request to a paste route carries, if that route may act on one.
+///
+/// `Form` reads the query string on GET and HEAD, so `?password=` unlocked the paste — and put the
+/// password into browser history, bookmarks, the same-origin `Referer` and every proxy log on the
+/// way. `?confirm_burn=1` is the same story: set by anything that merely follows a link, so an
+/// `<img>` or a prefetch burnt the paste. Neither method is read for a form at all, therefore.
+///
+/// A body that does not parse as the form is no form, as it always was, but one that broke the
+/// body limit is answered as too large: dropping that rejection too answered an oversized password
+/// with the prompt again and a 200, while `/new` calls the same body too large.
+pub(crate) fn form_body<T>(
+    method: &http::Method,
+    form: Result<Form<T>, FormRejection>,
+) -> Result<Option<T>, crate::Error> {
+    if matches!(*method, http::Method::GET | http::Method::HEAD) {
+        return Ok(None);
+    }
+
+    match form {
+        Ok(Form(form)) => Ok(Some(form)),
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            Err(crate::Error::PayloadTooLarge)
+        }
+        Err(_) => Ok(None),
+    }
+}
 
 /// The page context every rendered response is built from: the site's [`Page`] metadata plus the
 /// three per-request preferences.

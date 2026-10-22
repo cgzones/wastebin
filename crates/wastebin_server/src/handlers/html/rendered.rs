@@ -9,7 +9,7 @@ use crate::cache::{Key, Mode};
 use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasteForm;
 use crate::handlers::html::{
-    Chrome, ErrorResponse, FormAction, PasteReader, PasteView, render_sized,
+    Chrome, ErrorResponse, FormAction, PasteReader, PasteView, form_body, render_sized,
 };
 use crate::i18n::Lang;
 use crate::{Cache, Database, Highlighter, Page};
@@ -53,12 +53,7 @@ pub async fn get(
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
-        // Same reason as the source view: `Form` reads the query string on GET and HEAD, so
-        // neither a password nor a burn confirmation may be taken from one there.
-        let form = form
-            .ok()
-            .map(|Form(form)| form)
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
+        let form = form_body(&method, form)?;
         let key: Key = id.parse()?;
 
         PasteReader {
@@ -147,6 +142,33 @@ mod tests {
             res.text().await?.contains("type=\"password\""),
             "expected the prompt, not a failed attempt"
         );
+
+        Ok(())
+    }
+
+    /// The body limit's rejection was dropped along with every other one, so an oversized
+    /// password submission got the prompt again and a 200 rather than the 413 `/new` answers.
+    #[tokio::test]
+    async fn an_oversized_password_form_is_too_large() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# Hello"),
+            extension: Some(String::from("md")),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.trim_start_matches('/');
+
+        // `make_app` is given a 1 MiB limit by the test harness.
+        let res = client
+            .post(&format!("/md/{id}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body("x".repeat(2 * 1024 * 1024))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         Ok(())
     }
