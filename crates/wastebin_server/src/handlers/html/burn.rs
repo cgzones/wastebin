@@ -53,6 +53,22 @@ impl Burn {
 mod tests {
     use crate::test_helpers::Client;
     use crate::{handlers::insert::form::Entry, test_helpers::StoreCookies};
+
+    #[tokio::test]
+    async fn extension_is_escaped() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let body = client
+            .get("/burn/aaaaaaaaaaa.%22%3E%3Cimg%20src=x%3E")
+            .send()
+            .await?
+            .text()
+            .await?;
+
+        assert!(!body.contains("<img src=x"), "raw markup leaked: {body}");
+
+        Ok(())
+    }
     use reqwest::{StatusCode, header};
 
     #[tokio::test]

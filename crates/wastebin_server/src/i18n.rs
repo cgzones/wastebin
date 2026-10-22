@@ -37,8 +37,15 @@ impl Lang {
 
     /// Look up `key` and substitute the `{0}` placeholder with `arg`'s
     /// `Display` representation.
+    ///
+    /// `arg` is caller-supplied and therefore HTML-escaped here, so that the result stays safe to
+    /// render unescaped even though translations may contain markup.
     pub(crate) fn t_with(self, key: &'static str, arg: impl std::fmt::Display) -> String {
-        self.t(key).replace("{0}", &arg.to_string())
+        let arg = arg.to_string();
+        let mut escaped = String::with_capacity(arg.len());
+        wastebin_highlight::escape(&arg, &mut escaped);
+
+        self.t(key).replace("{0}", &escaped)
     }
 
     /// Render an [`Expiration`]'s duration in the current language.
@@ -380,6 +387,15 @@ mod tests {
         assert_eq!(Lang::En.duration(&never), "never");
         assert_eq!(Lang::De.duration(&never), "nie");
         assert_eq!(Lang::Zh.duration(&never), "永不");
+    }
+
+    #[test]
+    fn t_with_escapes_the_argument() {
+        let s = Lang::En.t_with("duration.days", r#"a."><img src=x>"#);
+        assert!(!s.contains("<img"), "raw markup leaked: {s}");
+        assert!(s.contains("&#39;") || s.contains("&quot;"), "{s}");
+        // The text from the translation itself is preserved.
+        assert!(s.ends_with(" days"), "{s}");
     }
 
     #[test]

@@ -61,8 +61,8 @@ impl Default for Highlighter {
     }
 }
 
-/// Escape HTML tags in `s` and write output to `buf`.
-fn escape(s: &str, buf: &mut String) {
+/// Escape the characters that let a value break out of text or an attribute, appending to `buf`.
+pub fn escape(s: &str, buf: &mut String) {
     // Because the internet is always right, turns out there's not that many
     // characters to escape: http://stackoverflow.com/questions/7381974
     let mut last = 0;
