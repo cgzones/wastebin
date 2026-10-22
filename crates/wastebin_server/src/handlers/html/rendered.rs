@@ -1,14 +1,15 @@
 use askama::Template;
 use askama_web::WebTemplate;
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Path, State};
 use axum::response::{IntoResponse, Response};
 
 use crate::cache::{Key, Mode};
 use crate::handlers::NoStore;
-use crate::handlers::extract::{Theme, Uids};
+use crate::handlers::extract::{Theme, Uids, can_delete};
 use crate::handlers::html::paste::PasteForm;
 use crate::handlers::html::{
-    BurnConfirmation, ErrorResponse, FormAction, PasswordInput, make_error,
+    BurnConfirmation, ErrorResponse, FormAction, make_error, password_input,
 };
 use crate::i18n::Lang;
 use crate::{Cache, Database, Highlighter, Page};
@@ -24,7 +25,7 @@ use wastebin_highlight::markdown;
 pub(crate) struct Rendered {
     page: Page,
     key: Key,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     can_delete: bool,
     is_available: bool,
@@ -36,16 +37,16 @@ pub(crate) struct Rendered {
 }
 
 #[expect(clippy::too_many_arguments)]
-pub async fn get<E>(
+pub async fn get(
     State(cache): State<Cache>,
     State(page): State<Page>,
     State(db): State<Database>,
     State(highlighter): State<Highlighter>,
     Path(id): Path<String>,
     uids: Option<Uids>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
-    form: Result<Form<PasteForm>, E>,
+    form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
         let form = form.ok().map(|Form(form)| form);
@@ -62,7 +63,7 @@ pub async fn get<E>(
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {
                 page: page.clone(),
-                theme: theme.clone(),
+                theme,
                 lang,
                 title: metadata.title.clone(),
                 action: FormAction::rendered(&key),
@@ -78,14 +79,12 @@ pub async fn get<E>(
                 (data, is_available, true)
             }
             Err(db::Error::NoPassword) => {
-                return Ok(PasswordInput {
-                    page: page.clone(),
-                    theme: theme.clone(),
+                return Ok(password_input(
+                    &page,
+                    theme,
                     lang,
-                    action: FormAction::rendered(&key),
-                }
-                .into_response()
-                .no_store());
+                    FormAction::rendered(&key),
+                ));
             }
             Err(err) => return Err(err.into()),
         };
@@ -97,11 +96,6 @@ pub async fn get<E>(
             expiration,
             ..
         } = metadata;
-
-        let can_delete = match (uids, owner_uid) {
-            (Some(Uids(uids)), Some(owner_uid)) => uids.contains(&owner_uid),
-            _ => false,
-        };
 
         let html = if let Some(cached) = cache.get(&key, Mode::Rendered) {
             tracing::trace!(?key, "found cached rendered markdown");
@@ -122,10 +116,10 @@ pub async fn get<E>(
 
         let rendered = Rendered {
             page: page.clone(),
+            can_delete: can_delete(uids.as_ref(), owner_uid),
             key,
-            theme: theme.clone(),
+            theme,
             lang,
-            can_delete,
             is_available,
             is_markdown: true,
             expiration,

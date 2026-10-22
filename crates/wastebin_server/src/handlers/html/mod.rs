@@ -9,9 +9,11 @@ use std::fmt;
 use askama::Template;
 use askama_web::WebTemplate;
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 
 use crate::Page;
 use crate::cache::Key;
+use crate::handlers::NoStore;
 use crate::handlers::extract::Theme;
 use crate::i18n::Lang;
 
@@ -42,7 +44,7 @@ impl fmt::Display for FormAction {
 #[template(path = "error.html")]
 pub(crate) struct Error {
     pub page: Page,
-    pub theme: Option<Theme>,
+    pub theme: Theme,
     pub lang: Lang,
     pub description: String,
 }
@@ -52,7 +54,7 @@ pub(crate) struct Error {
 #[template(path = "encrypted.html")]
 pub(crate) struct PasswordInput {
     pub page: Page,
-    pub theme: Option<Theme>,
+    pub theme: Theme,
     pub lang: Lang,
     pub action: FormAction,
 }
@@ -63,10 +65,30 @@ pub(crate) struct PasswordInput {
 #[template(path = "burn-confirmation.html")]
 pub(crate) struct BurnConfirmation {
     pub page: Page,
-    pub theme: Option<Theme>,
+    pub theme: Theme,
     pub lang: Lang,
     pub title: Option<String>,
     pub action: FormAction,
+}
+
+/// Render the password prompt shown when a paste is encrypted but no password was supplied.
+#[must_use]
+///
+/// The prompt is marked `no-store`, like everything else served for an encrypted paste.
+pub(crate) fn password_input(
+    page: &Page,
+    theme: Theme,
+    lang: Lang,
+    action: FormAction,
+) -> Response {
+    PasswordInput {
+        page: page.clone(),
+        theme,
+        lang,
+        action,
+    }
+    .into_response()
+    .no_store()
 }
 
 /// Error response carrying a status code and the page itself.
@@ -75,12 +97,7 @@ pub(crate) type ErrorResponse = (StatusCode, Error);
 /// Create an error response from `error` consisting of [`StatusCode`] derive from `error` as well
 /// as a rendered page with a description.
 #[must_use]
-pub fn make_error(
-    error: crate::Error,
-    page: Page,
-    theme: Option<Theme>,
-    lang: Lang,
-) -> ErrorResponse {
+pub fn make_error(error: crate::Error, page: Page, theme: Theme, lang: Lang) -> ErrorResponse {
     let description = error.to_string();
     (
         error.into(),

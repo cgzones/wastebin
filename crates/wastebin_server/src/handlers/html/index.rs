@@ -10,7 +10,7 @@ use crate::{Highlighter, Page, handlers::extract::Theme};
 pub async fn get(
     State(page): State<Page>,
     State(highlighter): State<Highlighter>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
 ) -> Index {
     Index {
@@ -26,7 +26,7 @@ pub async fn get(
 #[template(path = "index.html")]
 pub(crate) struct Index {
     page: Page,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     highlighter: Highlighter,
 }

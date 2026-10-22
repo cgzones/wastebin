@@ -4,7 +4,7 @@ use axum::response::{IntoResponse, Response};
 use crate::cache::Key;
 use crate::handlers::NoStore;
 use crate::handlers::extract::{Password, Theme};
-use crate::handlers::html::{ErrorResponse, FormAction, PasswordInput, make_error};
+use crate::handlers::html::{ErrorResponse, FormAction, make_error, password_input};
 use crate::i18n::Lang;
 use crate::{Database, Page};
 use wastebin_core::db;
@@ -15,7 +15,7 @@ pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
     State(page): State<Page>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
@@ -26,14 +26,9 @@ pub async fn get(
         match db.get(key.id, password).await {
             Ok(Entry::Regular(data) | Entry::Burned(data)) => Ok(data.text.into_response()),
             Ok(Entry::Encrypted(data)) => Ok(data.text.into_response().no_store()),
-            Err(db::Error::NoPassword) => Ok(PasswordInput {
-                page: page.clone(),
-                theme: theme.clone(),
-                lang,
-                action: FormAction::source(&key),
+            Err(db::Error::NoPassword) => {
+                Ok(password_input(&page, theme, lang, FormAction::source(&key)))
             }
-            .into_response()
-            .no_store()),
             Err(err) => Err(err.into()),
         }
     }

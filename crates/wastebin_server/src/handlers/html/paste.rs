@@ -1,5 +1,6 @@
 use askama::Template;
 use askama_web::WebTemplate;
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, Path, Query, State};
 use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::SignedCookieJar;
@@ -7,9 +8,9 @@ use axum_extra::extract::cookie::Key as CookieKey;
 use serde::Deserialize;
 
 use crate::cache::{Key, Mode};
-use crate::handlers::extract::{Theme, Uids, verify_owner_token};
+use crate::handlers::extract::{Theme, Uids, can_delete, verify_owner_token};
 use crate::handlers::html::{
-    BurnConfirmation, ErrorResponse, FormAction, PasswordInput, make_error,
+    BurnConfirmation, ErrorResponse, FormAction, make_error, password_input,
 };
 use crate::handlers::{NoStore, uid_cookie};
 use crate::i18n::Lang;
@@ -42,7 +43,7 @@ pub(crate) struct PasteForm {
 pub(crate) struct Paste {
     page: Page,
     key: Key,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
     can_delete: bool,
     /// If the paste still in the database and can be fetched with another request.
@@ -61,16 +62,16 @@ pub(crate) fn is_markdown_ext(ext: Option<&str>) -> bool {
 }
 
 #[expect(clippy::too_many_arguments)]
-pub async fn get<E>(
+pub async fn get(
     State(appstate): State<AppState>,
     State(cookie_key): State<CookieKey>,
     Path(id): Path<String>,
     Query(handoff): Query<OwnerHandoff>,
     jar: SignedCookieJar,
     uids: Option<Uids>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
-    form: Result<Form<PasteForm>, E>,
+    form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     let cache = &appstate.cache;
     let page = &appstate.page;
@@ -106,7 +107,7 @@ pub async fn get<E>(
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {
                 page: page.clone(),
-                theme: theme.clone(),
+                theme,
                 lang,
                 title: metadata.title.clone(),
                 action: FormAction::source(&key),
@@ -122,14 +123,7 @@ pub async fn get<E>(
                 (data, is_available, true)
             }
             Err(db::Error::NoPassword) => {
-                return Ok(PasswordInput {
-                    page: page.clone(),
-                    theme: theme.clone(),
-                    lang,
-                    action: FormAction::source(&key),
-                }
-                .into_response()
-                .no_store());
+                return Ok(password_input(page, theme, lang, FormAction::source(&key)));
             }
             Err(err) => return Err(err.into()),
         };
@@ -142,19 +136,16 @@ pub async fn get<E>(
             ..
         } = metadata;
 
-        let can_delete = match (uids, owner_uid) {
-            (Some(Uids(uids)), Some(owner_uid)) => uids.contains(&owner_uid),
-            _ => false,
-        };
-
         let html = if let Some(html) = cache.get(&key, Mode::Source) {
             tracing::trace!(?key, "found cached item");
             html.into_inner()
         } else {
-            let ext = key.ext.clone();
-            let highlighter = highlighter.clone();
-            let html =
-                tokio::task::spawn_blocking(move || highlighter.highlight(text, ext)).await??;
+            let html = tokio::task::spawn_blocking({
+                let ext = key.ext.clone();
+                let highlighter = highlighter.clone();
+                move || highlighter.highlight(text, ext)
+            })
+            .await??;
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");
@@ -164,18 +155,17 @@ pub async fn get<E>(
             html.into_inner()
         };
 
-        let is_markdown = is_markdown_ext(key.ext.as_deref());
         let paste = Paste {
             page: page.clone(),
+            can_delete: can_delete(uids.as_ref(), owner_uid),
+            is_markdown: is_markdown_ext(key.ext.as_deref()),
             key,
-            theme: theme.clone(),
+            theme,
             lang,
-            can_delete,
             is_available,
             expiration,
             html,
             title,
-            is_markdown,
         };
 
         let response = paste.into_response();

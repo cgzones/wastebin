@@ -13,7 +13,7 @@ pub async fn delete(
     State(appstate): State<AppState>,
     State(page): State<Page>,
     Uids(uids): Uids,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
 ) -> Result<Redirect, ErrorResponse> {
     async {
@@ -22,7 +22,7 @@ pub async fn delete(
         Ok(Redirect::to("/"))
     }
     .await
-    .map_err(|err| make_error(err, page.clone(), theme, lang))
+    .map_err(|err| make_error(err, page, theme, lang))
 }
 
 #[cfg(test)]

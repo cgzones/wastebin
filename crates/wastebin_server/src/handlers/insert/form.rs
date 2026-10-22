@@ -1,5 +1,6 @@
 use std::num::NonZeroU32;
 
+use axum::extract::rejection::FormRejection;
 use axum::extract::{Form, State};
 use axum::response::{IntoResponse, Redirect};
 use axum_extra::extract::cookie::SignedCookieJar;
@@ -48,14 +49,14 @@ impl From<Entry> for write::Entry {
     }
 }
 
-pub async fn post<E: std::fmt::Debug>(
+pub async fn post(
     State(page): State<Page>,
     State(appstate): State<AppState>,
     jar: SignedCookieJar,
     uids: Option<Uids>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
-    entry: Result<Form<Entry>, E>,
+    entry: Result<Form<Entry>, FormRejection>,
 ) -> Result<(SignedCookieJar, Redirect), impl IntoResponse> {
     let Ok(Form(entry)) = entry else {
         return Err(make_error(crate::Error::MalformedForm, page, theme, lang));
@@ -99,9 +100,7 @@ pub async fn post<E: std::fmt::Debug>(
             }
         };
 
-        let cookie = uid_cookie(&uids);
-
-        Ok((jar.add(cookie), Redirect::to(&url)))
+        Ok((jar.add(uid_cookie(&uids)), Redirect::to(&url)))
     }
     .await
     .map_err(|err| make_error(err, page, theme, lang))

@@ -2,35 +2,29 @@ use askama::Template;
 use askama_web::WebTemplate;
 use axum::extract::{Path, State};
 
+use crate::Page;
 use crate::cache::Key;
 use crate::handlers::extract::Theme;
-use crate::handlers::html::qr::{code_from, dark_modules};
+use crate::handlers::html::qr::{code_for, dark_modules};
 use crate::handlers::html::{ErrorResponse, make_error};
 use crate::i18n::Lang;
-use crate::{Error, Page};
 
 /// GET handler for the burn page.
 pub async fn get(
     Path(id): Path<String>,
     State(page): State<Page>,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
 ) -> Result<Burn, ErrorResponse> {
     async {
         let key: Key = id.parse()?;
-
-        let code = tokio::task::spawn_blocking({
-            let page = page.clone();
-            move || code_from(&page.base_url, &id)
-        })
-        .await
-        .map_err(Error::from)??;
+        let code = code_for(&page, id).await?;
 
         Ok(Burn {
             page: page.clone(),
             key,
             code,
-            theme: theme.clone(),
+            theme,
             lang,
         })
     }
@@ -45,7 +39,7 @@ pub(crate) struct Burn {
     page: Page,
     key: Key,
     code: qrcodegen::QrCode,
-    theme: Option<Theme>,
+    theme: Theme,
     lang: Lang,
 }
 
