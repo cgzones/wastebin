@@ -238,7 +238,7 @@ editorWrap.addEventListener("drop", function(e) {
 
 function loadFile(file) {
   file.text().then(function(value) {
-    textarea.value = value.replace(/\n$/, "");
+    textarea.value = value;
     updateLineNumbers();
     updateStats();
 
