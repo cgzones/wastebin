@@ -239,6 +239,9 @@ POST a new paste to the `/` endpoint with the following JSON payload:
 }
 ```
 
+Expiry is kept in whole seconds: a paste that expires after N seconds stays
+readable for at least N seconds and is gone before N + 1 have passed.
+
 After successful insertion, you will receive a JSON response with the path to
 the newly created paste and a signed `owner` token authorizing deletion:
 

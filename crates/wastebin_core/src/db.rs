@@ -95,16 +95,25 @@ fn reply<T>(result: oneshot::Sender<T>, value: T) {
     }
 }
 
-/// Parse the leading metadata columns of a row into [`Metadata`] plus whether the entry expired.
-fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, bool)> {
-    let remaining = row.get::<_, Option<i64>>(2)?;
-
+/// Turn the seconds an entry has left into the expiration a view shows plus whether it expired.
+///
+/// An entry with no expiry has no count and so never expires. One is served through the whole
+/// second its expiry names, while the count reads nought — and an expiration of nought reads as
+/// "never" — so that second shows as the one it has left.
+fn expiry_state(remaining: Option<i64>) -> (Option<Expiration>, bool) {
     let expiration = remaining
-        .filter(|secs| *secs > 0)
-        .and_then(|secs| u64::try_from(secs).ok())
+        .filter(|secs| *secs >= 0)
+        .and_then(|secs| u64::try_from(secs.max(1)).ok())
         .map(|secs| Expiration {
             duration: Duration::from_secs(secs),
         });
+
+    (expiration, remaining.is_some_and(|secs| secs < 0))
+}
+
+/// Parse the leading metadata columns of a row into [`Metadata`] plus whether the entry expired.
+fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, bool)> {
+    let (expiration, expired) = expiry_state(row.get::<_, Option<i64>>(2)?);
 
     Ok((
         read::Metadata {
@@ -114,8 +123,7 @@ fn metadata_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(Metadata, boo
             must_be_deleted: row.get::<_, Option<bool>>(3)?.unwrap_or(false),
             is_encrypted: row.get::<_, Option<bool>>(4)?.unwrap_or(false),
         },
-        // An entry with no expiry has no count and so never expires.
-        remaining.is_some_and(|secs| secs < 0),
+        expired,
     ))
 }
 
@@ -1246,6 +1254,24 @@ mod tests {
         assert!(!db.take(id).await?);
 
         Ok(())
+    }
+
+    /// An entry is served through the whole second its expiry names, so it lives at least as long
+    /// as asked. Its count is nought for that second, which used to read as no expiry at all: the
+    /// paste looked permanent just before it vanished.
+    #[test]
+    fn the_last_second_still_shows_an_expiry() {
+        let shown = |remaining| expiry_state(remaining).0.map(|e| e.duration.as_secs());
+
+        assert_eq!(expiry_state(None), (None, false), "never expires");
+        assert!(expiry_state(Some(-1)).1, "past its last second");
+
+        assert!(!expiry_state(Some(0)).1, "still in its last second");
+        assert_eq!(shown(Some(0)), Some(1));
+
+        assert!(!expiry_state(Some(1)).1);
+        assert_eq!(shown(Some(1)), Some(1));
+        assert_eq!(shown(Some(31_536_000)), Some(31_536_000));
     }
 
     #[tokio::test]
