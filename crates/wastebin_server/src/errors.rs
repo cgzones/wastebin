@@ -28,6 +28,8 @@ pub(crate) enum Error {
     InvalidExtension,
     #[error("paste has no content")]
     EmptyPaste,
+    #[error("encryption asked for without a password")]
+    MissingPassword,
     #[error("payload exceeded limit")]
     PayloadTooLarge,
     #[error("unsupported media type")]
@@ -77,6 +79,7 @@ impl Error {
             Error::Id(_) | Error::UrlParsing(_) => "error.invalid_id",
             Error::InvalidExtension => "error.invalid_extension",
             Error::EmptyPaste => "error.empty_paste",
+            Error::MissingPassword => "error.missing_password",
             Error::RateLimit => "error.rate_limit",
             Error::TooLongExpires => "error.too_long_expires",
             Error::QrCode(_) => "error.qr_too_long",
@@ -161,6 +164,7 @@ impl From<&Error> for StatusCode {
             | Error::UrlParsing(_)
             | Error::InvalidExtension
             | Error::EmptyPaste
+            | Error::MissingPassword
             | Error::TooLongExpires
             | Error::QrCode(_)
             | Error::SyntaxHighlighting(

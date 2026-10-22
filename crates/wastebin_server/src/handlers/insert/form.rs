@@ -30,12 +30,20 @@ pub(crate) struct Entry {
     pub title: String,
     #[serde(rename = "burn-after-reading")]
     pub burn_after_reading: Option<String>,
+    /// The encryption toggle, `on` when ticked.
+    pub encrypt: Option<String>,
 }
 
 impl TryFrom<Entry> for write::Entry {
     type Error = crate::Error;
 
     fn try_from(entry: Entry) -> Result<Self, Self::Error> {
+        // The editor marks the field required once the toggle is ticked, but that only binds a
+        // browser running the script. Without a password the paste would be created public.
+        if entry.encrypt.as_deref() == Some("on") && entry.password.is_empty() {
+            return Err(crate::Error::MissingPassword);
+        }
+
         let burn_after_reading = entry.burn_after_reading.map(|s| s == "on");
         let password = (!entry.password.is_empty()).then_some(entry.password);
         let title = (!entry.title.is_empty()).then_some(entry.title);
@@ -137,6 +145,34 @@ mod tests {
     use crate::test_helpers::{Client, StoreCookies, some_entry};
     use reqwest::{StatusCode, header};
     use std::collections::HashMap;
+
+    /// The toggle was a bare checkbox the form never submitted, so ticking it and leaving the
+    /// password empty created a public paste from what the visitor took for a protected one.
+    #[tokio::test]
+    async fn encrypting_without_a_password_is_refused() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            encrypt: Some(String::from("on")),
+            ..some_entry()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        assert!(res.headers().get(header::LOCATION).is_none());
+
+        // A password still encrypts on its own: without JavaScript the toggle does nothing.
+        let data = Entry {
+            password: String::from("hunter2"),
+            ..some_entry()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get(header::LOCATION).unwrap().to_str()?;
+        let res = client.get(&format!("/raw{location}")).send().await?;
+        assert!(res.text().await?.contains("type=\"password\""));
+
+        Ok(())
+    }
 
     /// This route consumes its own `FormRejection`, so `handle_service_errors` never sees it. With
     /// a table of its own it answered an unsupported content type as a malformed form — a 422

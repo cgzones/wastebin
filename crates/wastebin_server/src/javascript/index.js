@@ -178,15 +178,27 @@ const encryptToggle = $("encrypt-toggle");
 const passwordGroup = $("password-group");
 
 if (encryptToggle && passwordGroup) {
+  const password = $("password");
+
   encryptToggle.addEventListener("change", function() {
+    // A ticked toggle with an empty password created a public paste, so it is required here and
+    // the server refuses the combination as well.
+    password.required = encryptToggle.checked;
+
     if (encryptToggle.checked) {
       passwordGroup.classList.add("shown");
-      $("password").focus();
+      password.focus();
     } else {
       passwordGroup.classList.remove("shown");
-      $("password").value = "";
+      password.value = "";
     }
   });
+
+  // A browser may restore the toggle ticked on reload, before any change event.
+  if (encryptToggle.checked) {
+    password.required = true;
+    passwordGroup.classList.add("shown");
+  }
 }
 
 const overlay = $("drop-overlay");
