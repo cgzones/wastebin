@@ -2,6 +2,7 @@ use axum::extract::{Path, State};
 use axum::response::Redirect;
 
 use crate::AppState;
+use crate::cache::Key;
 use crate::handlers::extract::Uids;
 use crate::handlers::html::{Chrome, ErrorResponse, SameSite};
 
@@ -19,8 +20,8 @@ pub async fn delete(
             return Err(crate::Error::MissingUid);
         };
 
-        let id = id.parse()?;
-        common_delete(&appstate, id, &uids).await?;
+        let key: Key = id.parse()?;
+        common_delete(&appstate, key.id, &uids).await?;
         Ok(Redirect::to("/"))
     }
     .await
@@ -31,6 +32,28 @@ pub async fn delete(
 mod tests {
     use crate::test_helpers::{Client, StoreCookies, some_entry};
     use reqwest::StatusCode;
+
+    /// The paste URL carries the extension, so a form built from it does too.
+    #[tokio::test]
+    async fn delete_accepts_a_key_with_its_extension() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(true)).await;
+
+        let entry = crate::handlers::insert::form::Entry {
+            extension: Some(String::from("rs")),
+            ..some_entry()
+        };
+        let res = client.post_form().form(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        let res = client.post(&format!("/delete{location}")).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+
+        let res = client.get(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn delete_via_link() -> Result<(), Box<dyn std::error::Error>> {

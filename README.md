@@ -264,11 +264,12 @@ the paste was encrypted, pass the password via the `wastebin-password` header.
 > retried `curl` — would burn it for its intended recipient.
 
 To delete a paste, make a DELETE request on the `/:id` route with the `uid`
-cookie set. A browser obtains that cookie by opening `/<id>?owner=<token>` with
-the `owner` token from the insert response: the server validates the token,
-appends the uid to the signed `uid` cookie and redirects to the clean paste URL.
-The form-based UI sets the same cookie in the `Set-Cookie` header of the
-redirect response after creation.
+cookie set; the `path` an insert answers with works too, extension included. A
+browser obtains that cookie by opening `/<id>?owner=<token>` with the `owner`
+token from the insert response: the server validates the token, appends the uid
+to the signed `uid` cookie and redirects to the clean paste URL. The form-based
+UI sets the same cookie in the `Set-Cookie` header of the redirect response
+after creation.
 
 For liveness probes, make a GET request on the `/health` route. It answers
 `200 OK` with an empty body when a query round-trips through the database, and

@@ -558,11 +558,7 @@ mod tests {
             assert!(res.text().await?.contains("cache-me-then-delete"));
         }
 
-        // Deletion goes through the bare id, without the extension the URL carries.
-        let id = location.trim_start_matches('/');
-        let id = id.split('.').next().unwrap();
-
-        let res = client.delete(&format!("/{id}")).send().await?;
+        let res = client.delete(&location).send().await?;
         assert_eq!(res.status(), StatusCode::OK);
 
         let res = client

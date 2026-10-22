@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 
 use crate::AppState;
+use crate::cache::Key;
 use crate::errors::{Error, JsonErrorResponse};
 use crate::handlers::extract::Uids;
 
@@ -15,8 +16,10 @@ pub async fn delete(
         return Err(Error::MissingUid.into());
     };
 
-    let id = id.parse().map_err(Error::Id)?;
-    common_delete(&appstate, id, &uids).await?;
+    // The extension names no part of the stored paste, but it is part of the path an insert
+    // answers with, and every read route accepts it.
+    let key: Key = id.parse()?;
+    common_delete(&appstate, key.id, &uids).await?;
     Ok(())
 }
 
@@ -39,6 +42,31 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
 
         let res = client.get(&format!("/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+        Ok(())
+    }
+
+    /// Insertion answers with the path including its extension, and every read route accepts it,
+    /// but deletion parsed a bare id and refused that same path as malformed.
+    #[tokio::test]
+    async fn delete_accepts_the_path_insertion_returned() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(true)).await;
+
+        let entry = crate::handlers::insert::form::Entry {
+            extension: Some(String::from("rs")),
+            ..some_entry()
+        };
+        let res = client.post_form().form(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        assert!(location.ends_with(".rs"), "{location}");
+
+        let res = client.delete(&location).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = client.get(&location).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
