@@ -201,9 +201,13 @@ mod tests {
             .await?;
 
         assert_eq!(res.status(), StatusCode::OK);
+        // The content is gone from the server once shown, so no copy of the page may be kept
+        // either — not by a shared cache, and not by the browser for its back button.
+        let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
         let body = res.text().await?;
         assert!(body.contains("secret-body-xyz"));
         assert_revealed_page_works(&body);
+        assert_eq!(cache_control.unwrap(), "no-store");
 
         // Subsequent GETs 404 — the paste was burned.
         let res = client
@@ -429,10 +433,65 @@ mod tests {
             .send()
             .await?;
         assert_eq!(res.status(), StatusCode::OK);
+        let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
         assert!(res.text().await?.contains("secret-body-xyz"));
+        assert_eq!(cache_control.unwrap(), "no-store");
 
         let res = client.get(&location).send().await?;
         assert_eq!(res.status(), StatusCode::NOT_FOUND, "should be burned");
+
+        Ok(())
+    }
+
+    /// Rendering before the paste is destroyed must not let readers who confirm together each see
+    /// it: whichever destroys the row is the one that is shown the content.
+    #[tokio::test]
+    async fn concurrent_confirmed_reads_show_a_burn_once() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = std::sync::Arc::new(Client::new(StoreCookies(false)).await);
+
+        for password in ["", "hunter2"] {
+            let data = Entry {
+                text: String::from("secret-body-xyz"),
+                password: password.to_owned(),
+                burn_after_reading: Some(String::from("on")),
+                ..Default::default()
+            };
+            let res = client.post_form().form(&data).send().await?;
+            let location = res
+                .headers()
+                .get("location")
+                .unwrap()
+                .to_str()?
+                .replace("burn/", "");
+
+            let readers = (0..8)
+                .map(|_| {
+                    let client = std::sync::Arc::clone(&client);
+                    let location = location.clone();
+                    tokio::spawn(async move {
+                        let res = client
+                            .post(&location)
+                            .form(&[("confirm_burn", "1"), ("password", password)])
+                            .send()
+                            .await?;
+                        Ok::<_, reqwest::Error>((res.status(), res.text().await?))
+                    })
+                })
+                .collect::<Vec<_>>();
+
+            let mut shown = 0;
+            for reader in readers {
+                let (status, body) = reader.await??;
+                if body.contains("secret-body-xyz") {
+                    assert_eq!(status, StatusCode::OK);
+                    shown += 1;
+                } else {
+                    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+                }
+            }
+            assert_eq!(shown, 1, "password {password:?}: shown to {shown} readers");
+        }
 
         Ok(())
     }
