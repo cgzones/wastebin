@@ -2,8 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+
+- A Unix socket given by `WASTEBIN_UNIX_SOCKET_PATH` is created with mode
+  `0660` instead of inheriting it from the umask. A reverse proxy running as
+  another user now has to share the group to reach it.
+
 ### Fixed
 
+- Restarting after a crash no longer fails with `EADDRINUSE` when bound to a
+  Unix socket: a socket left behind is cleared at startup once connecting to it
+  is refused. One that cannot be probed, such as one the server may not connect
+  to, stops startup instead of being replaced.
 - A `WASTEBIN_PASSWORD_SALT` holding non-Unicode data is reported at startup
   instead of silently falling back to the default salt, which would have made
   every entry stored under the operator's salt undecryptable.

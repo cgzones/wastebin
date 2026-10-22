@@ -9,6 +9,8 @@ mod render;
 #[cfg(test)]
 mod test_helpers;
 
+use std::os::unix::fs::{FileTypeExt, PermissionsExt};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,7 +26,7 @@ use http::header::{
     WWW_AUTHENTICATE, X_CONTENT_TYPE_OPTIONS, X_FRAME_OPTIONS, X_XSS_PROTECTION,
 };
 use ratelimit::Ratelimiter;
-use tokio::net::{TcpListener, UnixListener};
+use tokio::net::{TcpListener, UnixListener, UnixStream};
 use tower::ServiceBuilder;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
@@ -388,6 +390,90 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
         .layer(from_fn(answer_options))
 }
 
+/// Access mode for a Unix socket this process creates.
+///
+/// Connecting to a Unix socket needs write permission on it, so the mode is what decides who may
+/// reach the server. Left to the umask it is whatever the service manager happened to set — `0777`
+/// under a umask of zero. Owner and group, so a reverse proxy is let in by sharing the group
+/// rather than by the socket standing open to every local account.
+const SOCKET_MODE: u32 = 0o660;
+
+/// What a failed connect to an existing socket file says about the instance behind it.
+#[derive(Debug, PartialEq, Eq)]
+enum Probe {
+    /// Nothing is bound to the socket any more, so it is ours to clear.
+    Stale,
+    /// The file went away between the stat and the connect, leaving nothing to clear.
+    Gone,
+    /// The probe could not tell; someone may well be listening.
+    Unknown,
+}
+
+/// Read the error from connecting to an existing socket file.
+///
+/// Refused is the one answer that proves no one is listening: the kernel found the socket and
+/// nothing bound to it. Any other failure — no permission to connect, a backlog full of waiting
+/// clients — says nothing about whether the owner is alive, and unlinking a live socket leaves its
+/// server running but unreachable.
+fn probe_failure(err: &std::io::Error) -> Probe {
+    match err.kind() {
+        std::io::ErrorKind::ConnectionRefused => Probe::Stale,
+        std::io::ErrorKind::NotFound => Probe::Gone,
+        _ => Probe::Unknown,
+    }
+}
+
+/// Bind the Unix socket at `path`, clearing a socket left behind by an earlier run.
+///
+/// Neither a graceful shutdown nor a crash can be relied on to unlink the socket file, and
+/// `bind` refuses a path that still exists: without this the *second* start of the same service
+/// fails with `EADDRINUSE`, so a restart never comes back. Only a socket that refuses the
+/// connection is removed — one with a live listener means another instance owns the path, one
+/// that cannot be probed may have one, and anything that is not a socket is the operator's file
+/// rather than ours. Two instances starting at once can still both find the old socket refusing,
+/// and the later one then unlinks the socket the earlier one has just bound.
+async fn bind_unix_socket(path: &Path) -> std::io::Result<UnixListener> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_socket() => match UnixStream::connect(path).await {
+            Ok(_) => {
+                return Err(std::io::Error::other(format!(
+                    "{} is already served by a running instance",
+                    path.display()
+                )));
+            }
+            Err(err) => match probe_failure(&err) {
+                Probe::Stale => {
+                    tracing::info!("removing stale socket {}", path.display());
+                    std::fs::remove_file(path)?;
+                }
+                Probe::Gone => {}
+                Probe::Unknown => {
+                    return Err(std::io::Error::new(
+                        err.kind(),
+                        format!(
+                            "cannot tell whether {} is still served: {err}",
+                            path.display()
+                        ),
+                    ));
+                }
+            },
+        },
+        Ok(_) => {
+            return Err(std::io::Error::other(format!(
+                "{} exists and is not a socket",
+                path.display()
+            )));
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+
+    let listener = UnixListener::bind(path)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(SOCKET_MODE))?;
+
+    Ok(listener)
+}
+
 async fn start() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
@@ -460,13 +546,15 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
                     .await?;
             }
             env::SocketType::Unix(path) => {
-                let listener = UnixListener::bind(path.clone())?;
+                let listener = bind_unix_socket(&path).await?;
                 let result = axum::serve(listener, app)
                     .with_graceful_shutdown(shutdown_signal())
                     .await;
 
-                if path.exists() {
-                    std::fs::remove_file(path)?;
+                // Unlinked even when serving failed, so the next start is not refused by the stale
+                // path.
+                if let Err(err) = std::fs::remove_file(&path) {
+                    tracing::warn!("could not remove socket {}: {err}", path.display());
                 }
 
                 result?;
@@ -1167,5 +1255,124 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// A socket path unique to this process and test, removed again however the test ends.
+    struct ScratchSocket(std::path::PathBuf);
+
+    impl ScratchSocket {
+        fn new(name: &str) -> Self {
+            let mut path = std::env::temp_dir();
+            path.push(format!("wastebin-test-{}-{name}.sock", std::process::id()));
+            let _ = std::fs::remove_file(&path);
+            Self(path)
+        }
+    }
+
+    impl Drop for ScratchSocket {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// Connect to `listener` at `path` and have it accept, failing rather than hanging if it
+    /// does not.
+    async fn assert_accepts(
+        path: &std::path::Path,
+        listener: &tokio::net::UnixListener,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let (connected, accepted) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(tokio::net::UnixStream::connect(path), listener.accept())
+            })
+            .await?;
+        connected?;
+        accepted?;
+
+        Ok(())
+    }
+
+    /// Only a refusal proves the socket stale. A full backlog answers `EAGAIN` and a socket this
+    /// process may not connect to answers `EACCES`, both with a live server behind them.
+    #[test]
+    fn only_a_refused_connection_marks_a_socket_stale() {
+        use crate::{Probe, probe_failure};
+        use std::io::{Error, ErrorKind};
+
+        assert_eq!(
+            probe_failure(&Error::from(ErrorKind::ConnectionRefused)),
+            Probe::Stale
+        );
+        assert_eq!(
+            probe_failure(&Error::from(ErrorKind::NotFound)),
+            Probe::Gone
+        );
+
+        for kind in [
+            ErrorKind::PermissionDenied,
+            ErrorKind::WouldBlock,
+            ErrorKind::TimedOut,
+        ] {
+            assert_eq!(
+                probe_failure(&Error::from(kind)),
+                Probe::Unknown,
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stale_socket_is_replaced() -> Result<(), Box<dyn std::error::Error>> {
+        let scratch = ScratchSocket::new("stale");
+        // A listener that goes away leaves its file behind, as a crash does.
+        drop(std::os::unix::net::UnixListener::bind(&scratch.0)?);
+
+        let listener = crate::bind_unix_socket(&scratch.0).await?;
+        assert_accepts(&scratch.0, &listener).await
+    }
+
+    #[tokio::test]
+    async fn a_live_socket_is_left_alone() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::MetadataExt;
+
+        let scratch = ScratchSocket::new("live");
+        let live = std::os::unix::net::UnixListener::bind(&scratch.0)?;
+        live.set_nonblocking(true)?;
+        let inode = std::fs::metadata(&scratch.0)?.ino();
+
+        assert!(crate::bind_unix_socket(&scratch.0).await.is_err());
+        assert_eq!(std::fs::metadata(&scratch.0)?.ino(), inode);
+
+        assert_accepts(&scratch.0, &tokio::net::UnixListener::from_std(live)?).await
+    }
+
+    /// Connecting needs write permission on the socket, so a live one whose mode shuts this
+    /// process out answered the probe with `EACCES` — and was unlinked as stale, leaving its
+    /// server running where nothing could reach it.
+    #[tokio::test]
+    async fn a_socket_that_cannot_be_probed_is_left_alone() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+        let scratch = ScratchSocket::new("unprobeable");
+        let live = std::os::unix::net::UnixListener::bind(&scratch.0)?;
+        live.set_nonblocking(true)?;
+        let inode = std::fs::metadata(&scratch.0)?.ino();
+        std::fs::set_permissions(&scratch.0, std::fs::Permissions::from_mode(0o000))?;
+
+        // Permission checks do not apply to root, so the case cannot be produced there.
+        if std::os::unix::net::UnixStream::connect(&scratch.0).is_ok() {
+            return Ok(());
+        }
+
+        let err = crate::bind_unix_socket(&scratch.0)
+            .await
+            .expect_err("a socket that could not be probed was replaced");
+        assert_eq!(err.kind(), std::io::ErrorKind::PermissionDenied);
+        assert_eq!(std::fs::metadata(&scratch.0)?.ino(), inode);
+
+        // Still the live listener's socket: let this process back in and reach it.
+        std::fs::set_permissions(&scratch.0, std::fs::Permissions::from_mode(0o600))?;
+        assert_accepts(&scratch.0, &tokio::net::UnixListener::from_std(live)?).await
     }
 }
