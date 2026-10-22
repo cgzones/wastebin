@@ -25,7 +25,11 @@ const BROTLI_WINDOW: u32 = 22;
 const GZIP_LEVEL: u32 = 9;
 
 /// Maximum age assets may be cached for, given that their routes embed a content hash.
-const MAX_AGE: Duration = Duration::from_hours(720);
+const MAX_AGE: Duration = Duration::from_hours(24 * 365);
+
+/// Maximum age of an asset whose route does not embed a content hash, after which it must be
+/// fetched again.
+const UNHASHED_MAX_AGE: Duration = Duration::from_hours(1);
 
 /// Content coding an asset is available in.
 ///
@@ -67,6 +71,9 @@ pub(crate) struct Asset {
     brotli: Option<Bytes>,
     /// Gzip encoded content, `None` if that is not smaller than [`Self::identity`].
     gzip: Option<Bytes>,
+    /// Whether `route` carries a content hash. Only then can the bytes behind it never change,
+    /// which is what makes an indefinite, unvalidated cache entry safe.
+    hashed: bool,
 }
 
 /// Asset kind.
@@ -128,6 +135,7 @@ impl Asset {
             identity,
             brotli,
             gzip,
+            hashed: true,
         }
     }
 
@@ -153,13 +161,20 @@ impl Asset {
 
         let body = body.expect("only available codings are negotiated");
 
+        // Only a hashed route is safe to pin: its URL changes with its content, so a client can
+        // never be stuck on a stale copy. An unhashed route outlives its bytes, so it gets a
+        // short window instead of being frozen.
+        let cache_control = if self.hashed {
+            headers::CacheControl::new()
+                .with_max_age(MAX_AGE)
+                .with_immutable()
+        } else {
+            headers::CacheControl::new().with_max_age(UNHASHED_MAX_AGE)
+        };
+
         let mut response = (
             TypedHeader(headers::ContentType::from(self.mime.clone())),
-            TypedHeader(
-                headers::CacheControl::new()
-                    .with_max_age(MAX_AGE)
-                    .with_immutable(),
-            ),
+            TypedHeader(cache_control),
             body,
         )
             .into_response();
@@ -466,12 +481,19 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(headers.get(http::header::CONTENT_TYPE).unwrap(), "text/css");
-        assert_eq!(
-            headers.get(http::header::CACHE_CONTROL).unwrap(),
-            "immutable, max-age=2592000"
-        );
         assert_eq!(headers.get(http::header::VARY).unwrap(), "accept-encoding");
         assert!(!headers.contains_key(http::header::CONTENT_ENCODING));
+    }
+
+    /// A content-hashed route can never serve different bytes, so it may be pinned forever.
+    #[test]
+    fn hashed_assets_are_cached_indefinitely() {
+        let response = response_for(&css_asset(), &[]);
+
+        assert_eq!(
+            response.headers().get(http::header::CACHE_CONTROL).unwrap(),
+            "immutable, max-age=31536000"
+        );
     }
 
     #[test]
@@ -601,5 +623,30 @@ mod tests {
             .expect("reading body");
 
         assert_eq!(body, asset.identity);
+    }
+
+    /// An unhashed route keeps serving the same URL after its content changes, so pinning it
+    /// would strand the stale copy in every client that fetched it.
+    #[test]
+    fn unhashed_assets_are_revalidated() {
+        let asset = Asset {
+            hashed: false,
+            ..Asset::new("favicon", Kind::Png, vec![0])
+        };
+        let response = response_for(&asset, &[]);
+
+        let cache_control = response
+            .headers()
+            .get(http::header::CACHE_CONTROL)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+
+        assert!(
+            !cache_control.contains("immutable"),
+            "got: {cache_control}"
+        );
+        assert_eq!(cache_control, "max-age=3600");
     }
 }
