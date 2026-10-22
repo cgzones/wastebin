@@ -179,7 +179,7 @@ mod tests {
             expirations.parse::<ExpirationSet>().unwrap(),
             1024,
             None,
-            &wastebin_highlight::Highlighter::default(),
+            &crate::test_helpers::HIGHLIGHTER,
         )
     }
 

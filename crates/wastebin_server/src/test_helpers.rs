@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use axum_extra::extract::cookie::Key;
@@ -14,6 +14,23 @@ use wastebin_core::db::{self, Database, write};
 use wastebin_core::expiration::ExpirationSet;
 use wastebin_core::id::Id;
 use wastebin_highlight::{Highlighter, Theme};
+
+// These fixtures are immutable. Share the syntax set, generated CSS and compressed assets;
+// each client still gets its own database, cache, cookie key and rate limiters.
+pub(crate) static HIGHLIGHTER: LazyLock<Arc<Highlighter>> =
+    LazyLock::new(|| Arc::new(Highlighter::default()));
+
+static PAGE: LazyLock<Arc<page::Page>> = LazyLock::new(|| {
+    Arc::new(page::Page::new(
+        String::from("test"),
+        url::Url::parse("https://localhost:8888").unwrap(),
+        Theme::Ayu,
+        "0".parse::<ExpirationSet>().unwrap(),
+        1024 * 1024,
+        None,
+        &HIGHLIGHTER,
+    ))
+});
 
 pub(crate) struct Client {
     client: reqwest::Client,
@@ -89,19 +106,10 @@ impl Client {
         let (db, handler) =
             Database::new(db::Open::Memory, "testsalt".to_string().try_into().unwrap())
                 .expect("open memory database");
-        let highlighter = Arc::new(Highlighter::default());
+        let highlighter = Arc::clone(&HIGHLIGHTER);
         let cache = Cache::new(NonZeroUsize::new(128), 64 * 1024 * 1024).unwrap();
         let key = Key::generate();
-        let expirations = "0".parse::<ExpirationSet>().unwrap();
-        let page = Arc::new(page::Page::new(
-            String::from("test"),
-            url::Url::parse("https://localhost:8888").unwrap(),
-            Theme::Ayu,
-            expirations,
-            1024 * 1024,
-            None,
-            &highlighter,
-        ));
+        let page = Arc::clone(&PAGE);
         let state = crate::AppState {
             db: db.clone(),
             cache,

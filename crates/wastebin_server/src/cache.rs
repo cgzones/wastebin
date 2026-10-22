@@ -170,6 +170,7 @@ impl FromStr for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_helpers::HIGHLIGHTER;
 
     #[test]
     fn cache_key() {
@@ -215,10 +216,6 @@ mod tests {
     fn test_cache(size: Option<NonZeroUsize>, max_bytes: usize) -> Cache {
         Cache::new(size, max_bytes).unwrap()
     }
-
-    /// Building one deserializes the whole syntax set, so the tests share a single instance.
-    static HIGHLIGHTER: std::sync::LazyLock<wastebin_highlight::Highlighter> =
-        std::sync::LazyLock::new(wastebin_highlight::Highlighter::default);
 
     /// The source-view mode a key's extension resolves to, worked out the way a request does.
     fn source(key: &Key) -> Mode {

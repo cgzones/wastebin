@@ -29,7 +29,7 @@ mod tests {
     /// The template submits `extensions.first()`.
     #[test]
     fn picker_extensions_pass_validation() {
-        let highlighter = wastebin_highlight::Highlighter::default();
+        let highlighter = &crate::test_helpers::HIGHLIGHTER;
 
         for syntax in highlighter.syntaxes() {
             let Some(extension) = syntax.extensions.first() else {
