@@ -341,7 +341,30 @@ function submitForm() {
   }
 }
 
+// Tab indents, so on its own it could never leave the editor and a keyboard user was trapped in
+// it. Escape hands the next Tab back to the browser, as code editors on the web do.
+let tabMovesFocus = false;
+
+textarea.addEventListener("blur", function() {
+  tabMovesFocus = false;
+});
+
 textarea.addEventListener("keydown", function(e) {
+  if (e.key === "Escape") {
+    tabMovesFocus = true;
+    return;
+  }
+
+  if (e.key === "Tab" && tabMovesFocus) {
+    tabMovesFocus = false;
+    return;
+  }
+
+  // Shift is pressed before the Tab it modifies, so a modifier on its own keeps the hand-off.
+  if (!["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+    tabMovesFocus = false;
+  }
+
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
     submitForm();

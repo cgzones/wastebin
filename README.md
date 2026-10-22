@@ -172,7 +172,8 @@ When viewing a paste, you can use
 * <kbd>Esc</kbd> to close it again.
 
 To paste some text you can also use the <kbd>ctrl</kbd>+<kbd>s</kbd> key
-combination.
+combination. In the editor <kbd>Tab</kbd> indents; press <kbd>Esc</kbd> and
+then <kbd>Tab</kbd> to move on to the next field.
 
 ### Markdown rendering
 

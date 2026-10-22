@@ -92,6 +92,7 @@ static EN: phf::Map<&'static str, &'static str> = phf_map! {
     "theme.auto" => "auto mode",
 
     "index.placeholder.paste" => "paste, type, or drop a file here …",
+    "index.hint.tab" => "Tab inserts an indent. Press Escape, then Tab, to move on to the next field.",
     "index.drop" => "drop to load file",
     "index.label.title" => "title",
     "index.placeholder.title" => "untitled",
@@ -212,6 +213,7 @@ static DE: phf::Map<&'static str, &'static str> = phf_map! {
     "theme.auto" => "Automatisch",
 
     "index.placeholder.paste" => "Text einfügen, tippen oder Datei hierher ziehen …",
+    "index.hint.tab" => "Tab rückt ein. Escape und danach Tab wechselt zum nächsten Feld.",
     "index.drop" => "Datei hier ablegen",
     "index.label.title" => "Titel",
     "index.placeholder.title" => "ohne Titel",
@@ -332,6 +334,7 @@ static ZH: phf::Map<&'static str, &'static str> = phf_map! {
     "theme.auto" => "自动模式",
 
     "index.placeholder.paste" => "在此处粘贴、输入或拖放文件…",
+    "index.hint.tab" => "Tab 键插入缩进。先按 Esc 再按 Tab 可移到下一个字段。",
     "index.drop" => "拖放以加载文件",
     "index.label.title" => "标题",
     "index.placeholder.title" => "无标题",

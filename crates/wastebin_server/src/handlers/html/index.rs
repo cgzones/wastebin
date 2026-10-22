@@ -25,6 +25,31 @@ mod tests {
     use crate::cache::valid_extension;
     use crate::test_helpers::{Client, StoreCookies};
 
+    /// Tab indents in the editor, so a keyboard user could not leave it; Escape hands the next
+    /// Tab back to the browser, and the editor has to say so to whoever cannot see the page.
+    #[tokio::test]
+    async fn the_editor_tells_how_to_leave_it() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let body = client.get("/").send().await?.text().await?;
+
+        let editor = body
+            .split('<')
+            .find(|tag| tag.starts_with("textarea "))
+            .ok_or("no editor")?;
+        assert!(
+            editor.contains(r#"aria-describedby="editor-hint""#),
+            "{editor}"
+        );
+
+        let hint = body
+            .split('<')
+            .find(|tag| tag.contains(r#"id="editor-hint""#))
+            .ok_or("no hint")?;
+        assert!(hint.contains("Escape"), "{hint}");
+
+        Ok(())
+    }
+
     /// The server can only refuse to encrypt with no password if it learns encryption was asked
     /// for, so the toggle has to be submitted with the form.
     #[tokio::test]
