@@ -290,16 +290,27 @@ function removeIndent() {
   textarea.setSelectionRange(Math.max(lineStart, start - width), Math.max(lineStart, end - width));
 }
 
+// `submit()` skips constraint validation, so a shortcut sent an empty paste to the server and got
+// its error page back; `requestSubmit()` checks the form exactly as the Paste button does.
+function submitForm() {
+  const form = $("form");
+  if (form.requestSubmit) {
+    form.requestSubmit();
+  } else if (form.reportValidity()) {
+    form.submit();
+  }
+}
+
 textarea.addEventListener("keydown", function(e) {
   if ((e.ctrlKey || e.metaKey) && e.key === "s") {
     e.preventDefault();
-    $("form").submit();
+    submitForm();
     return;
   }
 
   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
     e.preventDefault();
-    $("form").submit();
+    submitForm();
     return;
   }
 
