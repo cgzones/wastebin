@@ -57,6 +57,12 @@ pub(crate) fn cookie(name: &str, value: String) -> Cookie<'static> {
 
 /// Build the signed `uid` cookie carrying the client's uid list, which authorizes deletion of
 /// pastes.
+///
+/// `SameSite=Lax` rather than the `Strict` of the others: an `?owner=` handoff is a link someone
+/// opens, and `Strict` withholds the cookie on exactly that navigation — so the server saw no
+/// identity, minted a fresh one, and set it over the visitor's real one, costing them the right to
+/// delete everything they had already made. `Lax` still withholds it from cross-site POSTs and
+/// subresource loads, which is where deletion could otherwise be driven from.
 pub(crate) fn uid_cookie(uids: &[i64]) -> Cookie<'static> {
     let mut cookie = cookie("uid", serialize_uids(uids));
     cookie.set_same_site(SameSite::Lax);
