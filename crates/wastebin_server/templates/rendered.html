@@ -6,6 +6,10 @@
   </a>
 {% endblock %}
 
+{# Copy reads the source view's rows, which the rendered document does not have. #}
+{% block copy_button %}{% endblock %}
+{% block copy_help %}{% endblock %}
+
 {% block content %}
   <article class="markdown-body">
     {{ html|safe }}

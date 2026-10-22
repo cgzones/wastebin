@@ -307,6 +307,36 @@ mod tests {
         Ok(())
     }
 
+    /// Copy reads the source view's rows, which this view does not have, so its button and its
+    /// `c` did nothing at all. The source view, one click away, is where copying works.
+    #[tokio::test]
+    async fn only_the_source_view_offers_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# Hello"),
+            extension: Some(String::from("md")),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        for (view, offers_copy) in [
+            (location.clone(), true),
+            (format!("/md{location}"), false),
+            (format!("/qr{location}"), false),
+        ] {
+            let body = client.get(&view).send().await?.text().await?;
+            assert_eq!(
+                body.contains(r#"id="copy-button""#),
+                offers_copy,
+                "{view}: {body}"
+            );
+            assert_eq!(body.contains("<kbd>c</kbd>"), offers_copy, "{view}: {body}");
+        }
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn renders_markdown_as_html() -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;

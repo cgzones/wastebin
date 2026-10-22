@@ -126,7 +126,7 @@ function onKey(e) {
   else if (e.key == 'p') {
     window.location.href = window.location.href.split("?")[0];
   }
-  else if (e.key == 'c') {
+  else if (e.key == 'c' && copyButton) {
     copy();
   }
   else if (e.key == 'w') {
