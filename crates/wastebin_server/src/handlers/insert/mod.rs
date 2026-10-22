@@ -60,10 +60,19 @@ fn sanitize_title(title: &str) -> Option<String> {
     (!sanitized.is_empty()).then_some(sanitized)
 }
 
+/// Which identity a new paste is filed under.
+pub(crate) enum Owner {
+    /// An identity the client already holds, from its cookie or a signed `owner` token.
+    Existing(i64),
+    /// No identity yet, so one is minted — but only once the entry is known to be acceptable.
+    Mint,
+}
+
 async fn common_insert(
     appstate: &AppState,
     mut entry: write::Entry,
-) -> Result<(Id, write::Entry), Error> {
+    owner: Owner,
+) -> Result<(Id, write::Entry, i64), Error> {
     static RL_LOGGED: AtomicU64 = AtomicU64::new(0);
 
     // The form marks the textarea `required`, but that only binds a browser: both endpoints took
@@ -98,9 +107,18 @@ async fn common_insert(
         "paste insertions",
     )?;
 
-    let res = appstate.db.insert(entry).await?;
+    // Last, so a request that was never going to be stored does not write a row through the
+    // single-threaded actor first: minting ran ahead of every check above, and ahead of the
+    // limiter, so rejected inserts moved the counter with nothing accounting for them.
+    let uid = match owner {
+        Owner::Existing(uid) => uid,
+        Owner::Mint => appstate.db.next_uid().await?,
+    };
+    entry.uid = Some(uid);
 
-    Ok(res)
+    let (id, entry) = appstate.db.insert(entry).await?;
+
+    Ok((id, entry, uid))
 }
 
 #[cfg(test)]
@@ -129,6 +147,62 @@ mod tests {
             let res = client.post_json().json(&data).send().await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "json text {text:?}");
         }
+
+        Ok(())
+    }
+
+    /// Minting ran before the entry was looked at, so every rejected insert still wrote a row
+    /// through the single-threaded actor and moved the counter on — work no rate limit could ever
+    /// account for, since the limiter is checked later still.
+    #[tokio::test]
+    async fn a_rejected_insert_mints_no_uid() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        // The signed token carries `owner:<uid>` as its plaintext payload.
+        let uid_of = |token: &str| -> i64 {
+            let payload = token.split("owner:").nth(1).expect("token payload");
+            payload.parse().expect("uid")
+        };
+
+        let first = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: String::from("hi"),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        for _ in 0..5 {
+            let res = client
+                .post_json()
+                .json(&crate::handlers::insert::api::Entry {
+                    text: String::new(),
+                    ..Default::default()
+                })
+                .send()
+                .await?;
+            assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        }
+
+        let second = client
+            .post_json()
+            .json(&crate::handlers::insert::api::Entry {
+                text: String::from("hi"),
+                ..Default::default()
+            })
+            .send()
+            .await?
+            .json::<crate::handlers::insert::api::RedirectResponse>()
+            .await?;
+
+        assert_eq!(
+            uid_of(&second.owner),
+            uid_of(&first.owner) + 1,
+            "rejected inserts consumed uids"
+        );
 
         Ok(())
     }

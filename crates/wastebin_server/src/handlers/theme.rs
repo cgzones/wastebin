@@ -12,6 +12,7 @@ use crate::i18n::Lang;
 ///
 /// Storing the preference changes state, so it is not reachable by following a link — a
 /// prefetcher must not be able to retheme the site for a visitor.
+#[expect(clippy::too_many_arguments)]
 pub async fn post(
     State(page): State<Page>,
     SafeReferer(redirect): SafeReferer,

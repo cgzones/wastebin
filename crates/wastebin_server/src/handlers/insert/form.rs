@@ -16,7 +16,7 @@ use crate::{AppState, Page};
 use wastebin_core::db::write;
 use wastebin_core::id;
 
-use super::common_insert;
+use super::{Owner, common_insert};
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct Entry {
@@ -125,18 +125,18 @@ pub async fn post(
         // Only the first entry is ever used to tag a new paste. Uids claimed through the
         // `?owner=` handoff are appended behind it, so they grant deletion rights over the
         // pastes they came with but never capture what this client creates afterwards.
-        let primary = if let Some(uid) = uids.first().copied() {
-            uid
-        } else {
-            let uid = appstate.db.next_uid().await?;
-            uids.push(uid);
-            uid
+        let owner = match uids.first().copied() {
+            Some(uid) => Owner::Existing(uid),
+            None => Owner::Mint,
         };
 
-        let mut entry: write::Entry = entry.try_into()?;
-        entry.uid = Some(primary);
+        let entry: write::Entry = entry.try_into()?;
 
-        let (id, entry) = common_insert(&appstate, entry).await?;
+        let (id, entry, primary) = common_insert(&appstate, entry, owner).await?;
+
+        if uids.is_empty() {
+            uids.push(primary);
+        }
 
         let url = {
             let burn_after_reading = entry.burn_after_reading.unwrap_or(false);
