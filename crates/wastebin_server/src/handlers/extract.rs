@@ -495,6 +495,9 @@ fn lang_from_accept_language(header: &str) -> Lang {
                 })
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(1.0);
+            // RFC 9110 §12.4.2: a weight of 0 marks the entry "not acceptable", a refusal rather
+            // than a last resort. Checked on the weight itself, before the tie-break nudges it.
+            let q = Some(q).filter(|q| *q > 0.0)?;
 
             // Use position as a tie-breaker so the first listed entry wins
             // when weights are equal.
@@ -679,6 +682,12 @@ mod tests {
                 "header {header}"
             );
         }
+    }
+
+    #[test]
+    fn a_zero_weight_refuses_a_language() {
+        assert_eq!(lang_from_accept_language("de;q=0"), Lang::En);
+        assert_eq!(lang_from_accept_language("de;q=0, zh;q=0.5"), Lang::Zh);
     }
 
     #[test]
