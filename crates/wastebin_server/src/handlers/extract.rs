@@ -5,6 +5,7 @@ use axum::extract::{
     Form, FromRef, FromRequest, FromRequestParts, OptionalFromRequest, OptionalFromRequestParts,
     Request,
 };
+use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::Redirect;
 use axum_extra::extract::cookie::Key;
@@ -14,6 +15,7 @@ use serde::Deserialize;
 
 use wastebin_core::crypto;
 
+use crate::handlers::html::form_body;
 use crate::i18n::Lang;
 
 /// A safe redirect back to the referer.
@@ -365,11 +367,13 @@ impl<S> OptionalFromRequest<S> for Password
 where
     S: Send + Sync,
 {
-    type Rejection = ();
+    /// Only an oversized body is refused; the 413 is rendered by `handle_service_errors`.
+    type Rejection = StatusCode;
 
     async fn from_request(req: Request, state: &S) -> Result<Option<Self>, Self::Rejection> {
         #[derive(Deserialize, Debug)]
         struct Data {
+            #[serde(default)]
             password: String,
         }
 
@@ -390,9 +394,14 @@ where
             return Ok(None);
         }
 
-        Ok(Form::<Data>::from_request(req, state)
-            .await
-            .ok()
+        // An empty field is no password at all: the prompt asks again rather than spending a
+        // token on a derivation that can only fail.
+        let method = req.method().clone();
+        let form = Form::<Data>::from_request(req, state).await;
+
+        Ok(form_body(&method, form)
+            .map_err(StatusCode::from)?
+            .filter(|data| !data.password.is_empty())
             .map(|data| Password(data.password.as_bytes().to_vec().into())))
     }
 }

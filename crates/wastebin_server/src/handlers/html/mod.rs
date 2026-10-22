@@ -135,7 +135,7 @@ impl Chrome {
     }
 }
 
-/// Target of an interstitial's submit form, i.e. the view the paste was requested from.
+/// Target of an interstitial's submit form, i.e. the route the paste was requested from.
 #[derive(Clone, Debug)]
 pub(crate) struct FormAction(String);
 
@@ -148,6 +148,16 @@ impl FormAction {
     /// Post back to the rendered Markdown view at `/md/{key}`.
     pub(crate) fn rendered(key: &Key) -> Self {
         Self(format!("/md/{key}"))
+    }
+
+    /// Post back to the raw view at `/raw/{key}`.
+    pub(crate) fn raw(key: &Key) -> Self {
+        Self(format!("/raw/{key}"))
+    }
+
+    /// Post back to the download at `/dl/{key}`.
+    pub(crate) fn download(key: &Key) -> Self {
+        Self(format!("/dl/{key}"))
     }
 }
 

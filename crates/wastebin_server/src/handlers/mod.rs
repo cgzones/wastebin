@@ -113,6 +113,7 @@ pub(crate) async fn serve_bytes(
     chrome: &Chrome,
     id: String,
     password: Option<Password>,
+    action: fn(&Key) -> FormAction,
     respond: impl FnOnce(&Key, Data) -> Response,
 ) -> Result<Response, Error> {
     let password = password.map(|Password(password)| password);
@@ -120,9 +121,10 @@ pub(crate) async fn serve_bytes(
 
     let metadata = db.get_metadata(key.id).await?;
 
-    // These routes are GETs that return bytes, so there is nowhere to confirm the destruction and
-    // nothing stopping anything that merely follows a URL from triggering it. The content stays
-    // reachable through the paste page, which does ask first.
+    // These routes answer a plain GET with bytes — the POST is only their password prompt posting
+    // back — so there is nowhere to confirm the destruction and nothing stopping anything that
+    // merely follows a URL from triggering it. The content stays reachable through the paste page,
+    // which does ask first.
     if metadata.must_be_deleted {
         return Err(Error::BurnNotConfirmed);
     }
@@ -140,10 +142,12 @@ pub(crate) async fn serve_bytes(
         burn,
     } = match db.get(key.id, password).await {
         Ok(entry) => entry,
-        // A browser is sent the prompt to fill in; a client that asked for JSON cannot act on an
-        // HTML form and would only see a 200 where it expected the paste.
+        // A browser is sent the prompt to fill in, posting back here: sent to the source view, it
+        // rendered the page rather than the bytes and the next try prompted again. A client that
+        // asked for JSON cannot act on an HTML form and would only see a 200 where it expected
+        // the paste.
         Err(db::Error::NoPassword) if chrome.accepts == Accepts::Html => {
-            return Ok(chrome.password_input(FormAction::source(&key)));
+            return Ok(chrome.password_input(action(&key)));
         }
         Err(err) => return Err(err.into()),
     };

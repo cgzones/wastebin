@@ -7,12 +7,12 @@ use axum_extra::headers::HeaderValue;
 
 use crate::cache::Key;
 use crate::handlers::extract::Password;
-use crate::handlers::html::{Chrome, ErrorResponse};
+use crate::handlers::html::{Chrome, ErrorResponse, FormAction};
 use crate::handlers::{PasswordRatelimit, serve_bytes};
 use wastebin_core::db::Database;
 use wastebin_core::db::read::Data;
 
-/// GET handler for raw content of a paste.
+/// GET and POST handler for downloading a paste; the password prompt posts back here.
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
@@ -20,9 +20,15 @@ pub async fn get(
     chrome: Chrome,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
-    serve_bytes(&db, &ratelimit, &chrome, id, password, |key, data| {
-        get_download(key, data).into_response()
-    })
+    serve_bytes(
+        &db,
+        &ratelimit,
+        &chrome,
+        id,
+        password,
+        FormAction::download,
+        |key, data| get_download(key, data).into_response(),
+    )
     .await
     .map_err(|err| chrome.error(err))
 }
@@ -261,6 +267,51 @@ mod tests {
             .send()
             .await?;
         assert_eq!(res.status(), StatusCode::OK);
+        let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
+        assert_eq!(res.text().await?, "secret-body-xyz");
+        assert_eq!(cache_control.unwrap(), "no-store");
+
+        Ok(())
+    }
+
+    /// The prompt a browser is given here posted to the source view, so entering the password
+    /// rendered the highlighted page instead of starting the download.
+    #[tokio::test]
+    async fn the_prompt_unlocks_the_download() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("secret-body-xyz"),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let download = format!("/dl{location}");
+
+        let prompt = client
+            .get(&download)
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(
+            prompt.contains(&format!("action=\"{download}\"")),
+            "{prompt}"
+        );
+
+        // Exactly what the prompt submits.
+        let res = client
+            .post(&download)
+            .form(&[("confirm_burn", "1"), ("password", "hunter2")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(
+            res.headers()
+                .get(header::CONTENT_DISPOSITION)
+                .is_some_and(|value| value.as_bytes().starts_with(b"attachment")),
+        );
         let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
         assert_eq!(res.text().await?, "secret-body-xyz");
         assert_eq!(cache_control.unwrap(), "no-store");

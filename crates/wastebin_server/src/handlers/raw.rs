@@ -3,10 +3,10 @@ use axum::response::{IntoResponse, Response};
 
 use crate::Database;
 use crate::handlers::extract::Password;
-use crate::handlers::html::{Chrome, ErrorResponse};
+use crate::handlers::html::{Chrome, ErrorResponse, FormAction};
 use crate::handlers::{PasswordRatelimit, serve_bytes};
 
-/// GET handler for raw content of a paste.
+/// GET and POST handler for raw content of a paste; the password prompt posts back here.
 pub async fn get(
     Path(id): Path<String>,
     State(db): State<Database>,
@@ -14,9 +14,15 @@ pub async fn get(
     chrome: Chrome,
     password: Option<Password>,
 ) -> Result<Response, ErrorResponse> {
-    serve_bytes(&db, &ratelimit, &chrome, id, password, |_, data| {
-        data.text.into_response()
-    })
+    serve_bytes(
+        &db,
+        &ratelimit,
+        &chrome,
+        id,
+        password,
+        FormAction::raw,
+        |_, data| data.text.into_response(),
+    )
     .await
     .map_err(|err| chrome.error(err))
 }
@@ -214,6 +220,110 @@ mod tests {
         let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
         assert_eq!(res.text().await?, "secret-body-xyz");
         assert_eq!(cache_control.unwrap(), "no-store");
+
+        Ok(())
+    }
+
+    /// The prompt a browser is given here posted to the source view, so entering the password
+    /// rendered the highlighted page rather than the bytes — and asking for them again prompted
+    /// again, forever.
+    #[tokio::test]
+    async fn the_prompt_unlocks_the_raw_view() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("secret-body-xyz"),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let raw = format!("/raw{location}");
+
+        let prompt = client
+            .get(&raw)
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?
+            .text()
+            .await?;
+        assert!(prompt.contains(&format!("action=\"{raw}\"")), "{prompt}");
+
+        // Exactly what the prompt submits.
+        let res = client
+            .post(&raw)
+            .form(&[("confirm_burn", "1"), ("password", "hunter2")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
+        assert_eq!(res.text().await?, "secret-body-xyz");
+        assert_eq!(cache_control.unwrap(), "no-store");
+
+        // Submitting the prompt empty asks again rather than failing as a wrong password.
+        let res = client
+            .post(&raw)
+            .form(&[("confirm_burn", "1"), ("password", "")])
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.text().await?.contains("type=\"password\""));
+
+        Ok(())
+    }
+
+    /// A password posted to the prompt is an attempt like one sent in the header, so it spends a
+    /// token the same way.
+    #[tokio::test]
+    async fn posted_password_attempts_are_rate_limited() -> Result<(), Box<dyn std::error::Error>> {
+        let limiter = one_token_limiter();
+        let client = Client::new_with_ratelimit_password(StoreCookies(false), Some(limiter)).await;
+        let data = Entry {
+            text: String::from("SECRETPAYLOAD"),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let raw = format!("/raw{location}");
+
+        let first = client
+            .post(&raw)
+            .form(&[("password", "wrong")])
+            .send()
+            .await?;
+        assert_eq!(first.status(), StatusCode::UNAUTHORIZED);
+
+        let second = client
+            .post(&raw)
+            .form(&[("password", "wrong")])
+            .send()
+            .await?;
+        assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
+
+        Ok(())
+    }
+
+    /// The prompt posts here now, so a body over the limit has to be told it is too large rather
+    /// than read as no password and prompted for again.
+    #[tokio::test]
+    async fn an_oversized_password_form_is_too_large() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("secret-body-xyz"),
+            password: String::from("hunter2"),
+            ..Default::default()
+        };
+        let res = client.post_form().form(&data).send().await?;
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+
+        // `make_app` is given a 1 MiB limit by the test harness.
+        let res = client
+            .post(&format!("/raw{location}"))
+            .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+            .body("x".repeat(2 * 1024 * 1024))
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
         Ok(())
     }

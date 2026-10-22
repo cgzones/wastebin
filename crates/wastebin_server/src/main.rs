@@ -355,8 +355,8 @@ fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router 
                 .post(html::paste::get)
                 .delete(delete::api::delete),
         )
-        .route("/dl/{id}", get(download::get))
-        .route("/raw/{id}", get(raw::get))
+        .route("/dl/{id}", get(download::get).post(download::get))
+        .route("/raw/{id}", get(raw::get).post(raw::get))
         .route("/delete/{id}", post(delete::form::delete))
         .fallback(handle_not_found)
         .layer(
