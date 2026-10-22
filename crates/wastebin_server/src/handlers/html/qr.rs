@@ -34,6 +34,7 @@ pub async fn get(
             title,
             expiration,
             is_encrypted,
+            must_be_deleted: burns,
             ..
         } = db.get_metadata(key.id).await?;
 
@@ -50,6 +51,7 @@ pub async fn get(
             is_markdown: highlighter.is_markdown(key.ext.as_deref()),
             key,
             is_available: true,
+            burns,
             code,
             title,
             expiration,
@@ -69,6 +71,8 @@ pub(crate) struct Qr {
     key: Key,
     can_delete: bool,
     is_available: bool,
+    /// If the paste burns after reading, which `/raw` and `/dl` refuse to serve.
+    burns: bool,
     is_markdown: bool,
     code: qrcodegen::QrCode,
     title: Option<String>,
@@ -203,6 +207,56 @@ mod tests {
             .await?;
 
         assert!(body.contains("release-notes"), "title missing: {body}");
+
+        Ok(())
+    }
+
+    /// `/raw` and `/dl` refuse a paste that burns, since nothing there can confirm destroying it,
+    /// but this page offered both — and their shortcuts — for one, each answering 403. The views
+    /// that do ask first stay on offer.
+    #[tokio::test]
+    async fn a_burning_paste_is_not_offered_raw_or_download()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+
+        for burns in [true, false] {
+            let entry = Entry {
+                text: "FooBarBaz".to_string(),
+                extension: Some("md".to_string()),
+                burn_after_reading: Some(burns),
+                ..Default::default()
+            };
+            let payload = client
+                .post_json()
+                .json(&entry)
+                .send()
+                .await?
+                .json::<crate::handlers::insert::api::RedirectResponse>()
+                .await?;
+            let path = &payload.path;
+
+            let body = client
+                .get(&format!("/qr{path}"))
+                .send()
+                .await?
+                .text()
+                .await?;
+
+            for offered in [
+                format!(r#"href="/dl{path}""#),
+                format!(r#"href="/raw{path}""#),
+                String::from("<kbd>d</kbd>"),
+            ] {
+                assert_eq!(
+                    body.contains(&offered),
+                    !burns,
+                    "burns: {burns}, {offered}: {body}"
+                );
+            }
+            for kept in [format!(r#"href="{path}""#), format!(r#"href="/md{path}""#)] {
+                assert!(body.contains(&kept), "burns: {burns}, {kept}: {body}");
+            }
+        }
 
         Ok(())
     }

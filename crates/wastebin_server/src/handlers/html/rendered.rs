@@ -31,6 +31,8 @@ pub(crate) struct Rendered {
     lang: Lang,
     can_delete: bool,
     is_available: bool,
+    /// If the paste burns after reading, which `/raw` and `/dl` refuse to serve.
+    burns: bool,
     /// Always `true` for this view; needed by the inherited paste template.
     is_markdown: bool,
     expiration: Option<Expiration>,
@@ -55,13 +57,17 @@ pub async fn get(
     form: Result<Form<PasteForm>, FormRejection>,
 ) -> Result<Response, ErrorResponse> {
     async {
-        let form = form.ok().map(|Form(form)| form);
         // Same reason as the source view: `Form` reads the query string on GET and HEAD, and a
         // password does not belong in a URL.
+        let form = form
+            .ok()
+            .map(|Form(form)| form)
+            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD));
         let password = form
             .as_ref()
-            .filter(|_| !matches!(method, http::Method::GET | http::Method::HEAD))
             .and_then(|form| form.password.as_ref())
+            // An empty field is no password at all: it derives nothing, yet it cost a token and
+            // pushed the request off the cache on both the read and the write side.
             .filter(|password| !password.is_empty())
             .map(|password| Password::from(password.as_bytes().to_vec()));
         let confirmed = form.as_ref().and_then(|form| form.confirm_burn.as_deref()) == Some("1");
@@ -69,12 +75,9 @@ pub async fn get(
         let key: Key = id.parse()?;
         let metadata = db.get_metadata(key.id).await?;
 
-        // Only an attempt that reaches argon2 is worth a token; see `raw::get`. The metadata read
-        // above already settled whether this paste can derive anything.
-        if !no_password && metadata.is_encrypted {
-            ratelimit.check()?;
-        }
-
+        // This view destroys the paste just as the source view does, so it has to ask first —
+        // otherwise anything that follows the URL, including an image in someone else's rendered
+        // paste, destroys it on the reader's behalf.
         if metadata.must_be_deleted && !confirmed {
             return Ok(BurnConfirmation {
                 page: page.clone(),
@@ -88,6 +91,11 @@ pub async fn get(
                 action: FormAction::rendered(&key),
             }
             .into_response());
+        }
+
+        // Only an attempt that reaches argon2 is worth a token; see `raw::get`.
+        if !no_password && metadata.is_encrypted {
+            ratelimit.check()?;
         }
 
         // A cached render implies the paste was available and unencrypted when stored, so its
@@ -120,10 +128,18 @@ pub async fn get(
             let is_available = burn.is_none();
 
             let highlighter = highlighter.clone();
-            let rendered: Arc<String> = render_pool
+            let rendered: Arc<String> = match render_pool
                 .run(move || markdown::render(&text, &highlighter))
-                .await??
-                .into_inner();
+                .await?
+            {
+                Ok(html) => html.into_inner(),
+                // The general message sends the reader to `/raw` and the download, which refuse a
+                // paste that burns.
+                Err(wastebin_highlight::Error::TooLarge(_)) if burn.is_some() => {
+                    return Err(crate::Error::BurnRenderTooLarge);
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache rendered markdown");
@@ -137,6 +153,7 @@ pub async fn get(
             uid: owner_uid,
             title,
             expiration,
+            must_be_deleted: burns,
             ..
         } = metadata;
 
@@ -147,6 +164,7 @@ pub async fn get(
             theme,
             lang,
             is_available,
+            burns,
             is_markdown: true,
             expiration,
             html,
@@ -212,6 +230,49 @@ mod tests {
             res.text().await?.contains("type=\"password\""),
             "expected the prompt, not a failed attempt"
         );
+
+        Ok(())
+    }
+
+    /// The interstitial submits `confirm_burn` alone, so a form type demanding a `password` field
+    /// rejected exactly the request its own template sends — the reveal button re-rendered the
+    /// confirmation forever and the rendered view of a burn paste could never be reached.
+    #[tokio::test]
+    async fn burn_confirmation_reveals_the_render() -> Result<(), Box<dyn std::error::Error>> {
+        let client = Client::new(StoreCookies(false)).await;
+        let data = Entry {
+            text: String::from("# BurnedHeading"),
+            extension: Some(String::from("md")),
+            burn_after_reading: Some(String::from("on")),
+            ..Default::default()
+        };
+
+        let res = client.post_form().form(&data).send().await?;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        let location = res.headers().get("location").unwrap().to_str()?.to_owned();
+        let id = location.replace("/burn/", "");
+
+        // The confirmation comes first and reveals nothing.
+        let res = client
+            .get(&format!("/md/{id}"))
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(!res.text().await?.contains("BurnedHeading"));
+
+        // Confirming with exactly what the template posts renders the paste and burns it.
+        let res = client
+            .post(&format!("/md/{id}"))
+            .form(&[("confirm_burn", "1")])
+            .header(header::ACCEPT, "text/html")
+            .send()
+            .await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert!(res.text().await?.contains("BurnedHeading"));
+
+        let res = client.get(&format!("/md/{id}")).send().await?;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
         Ok(())
     }

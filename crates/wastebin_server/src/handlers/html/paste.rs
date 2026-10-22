@@ -31,6 +31,11 @@ pub(crate) struct OwnerHandoff {
     pub(crate) owner: Option<String>,
 }
 
+/// Body of the two forms a paste view answers: the password prompt and the burn confirmation.
+///
+/// Every field is optional because each form submits only its own: the confirmation posts
+/// `confirm_burn` alone. A required `password` rejected exactly that request, leaving the reveal
+/// button re-rendering the confirmation forever.
 #[derive(Deserialize, Debug)]
 pub(crate) struct PasteForm {
     #[serde(default)]
@@ -50,6 +55,8 @@ pub(crate) struct Paste {
     can_delete: bool,
     /// If the paste still in the database and can be fetched with another request.
     is_available: bool,
+    /// If the paste burns after reading, which `/raw` and `/dl` refuse to serve.
+    burns: bool,
     /// Expiration in case it was set.
     expiration: Option<Expiration>,
     html: Arc<String>,
@@ -192,11 +199,19 @@ pub async fn get(
 
             let ext = key.ext.clone();
             let highlighter = highlighter.clone();
-            let html: Arc<String> = appstate
+            let html: Arc<String> = match appstate
                 .renderer
                 .run(move || highlighter.highlight(text, ext))
-                .await??
-                .into_inner();
+                .await?
+            {
+                Ok(html) => html.into_inner(),
+                // The general message sends the reader to `/raw` and the download, which refuse a
+                // paste that burns.
+                Err(wastebin_highlight::Error::TooLarge(_)) if burn.is_some() => {
+                    return Err(crate::Error::BurnRenderTooLarge);
+                }
+                Err(err) => return Err(err.into()),
+            };
 
             if is_available && no_password {
                 tracing::trace!(?key, "cache item");
@@ -210,6 +225,7 @@ pub async fn get(
             uid: owner_uid,
             title,
             expiration,
+            must_be_deleted: burns,
             ..
         } = metadata;
 
@@ -221,6 +237,7 @@ pub async fn get(
             theme,
             lang,
             is_available,
+            burns,
             expiration,
             html,
             title,
@@ -256,16 +273,15 @@ mod tests {
     use reqwest::StatusCode;
 
     /// A burn paste whose page exceeds the render bound fails the same way on every attempt, and
-    /// the reveal burnt it before rendering — so the raw view the message sends the reader to
-    /// had nothing left to serve.
+    /// the reveal burnt it before rendering — then told the reader that the raw view and the
+    /// download still served what was already gone. Neither does for a paste that burns.
     #[tokio::test]
     async fn a_burn_paste_too_large_to_display_survives_the_attempt()
     -> Result<(), Box<dyn std::error::Error>> {
         let client = Client::new(StoreCookies(false)).await;
         // Every line costs its gutter and row markup, so this renders far past the bound.
-        let text = format!("x{}", "\n".repeat(230_000));
         let data = Entry {
-            text: text.clone(),
+            text: format!("x{}", "\n".repeat(230_000)),
             burn_after_reading: Some(String::from("on")),
             ..Default::default()
         };
@@ -281,15 +297,14 @@ mod tests {
                 .send()
                 .await?;
             assert_eq!(res.status(), StatusCode::BAD_REQUEST, "attempt {attempt}");
+
+            let body = res.text().await?;
+            assert!(body.contains("destroyed when read"), "body: {body}");
+            assert!(!body.contains("still serve it"), "body: {body}");
         }
 
-        // The raw view serves it, as the message says, and that read burns it.
         let res = client.get(&format!("/raw/{id}")).send().await?;
-        assert_eq!(res.status(), StatusCode::OK);
-        assert_eq!(res.text().await?, text);
-
-        let res = client.get(&format!("/raw/{id}")).send().await?;
-        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
         Ok(())
     }

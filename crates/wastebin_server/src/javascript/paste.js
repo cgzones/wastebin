@@ -107,15 +107,16 @@ function onKey(e) {
   if (e.key == 'n') {
     window.location.href = "/";
   }
-  else if (e.key == 'r' && pasteId) {
-    window.location.href = "/raw/" + pasteId;
+  // Raw and download follow their links, which are only there while the route serves the paste.
+  else if (e.key == 'r' && $("raw-link")) {
+    window.location.href = $("raw-link").href;
   }
   else if (e.key == 'y') {
     navigator.clipboard.writeText(window.location.href);
     showToast(TOAST_URL, 1500);
   }
-  else if (e.key == 'd' && pasteId) {
-    window.location.href = "/dl/" + pasteId;
+  else if (e.key == 'd' && $("download-link")) {
+    window.location.href = $("download-link").href;
   }
   else if (e.key == 'q' && pasteId) {
     window.location.href = "/qr/" + pasteId;

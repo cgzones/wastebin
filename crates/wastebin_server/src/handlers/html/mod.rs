@@ -69,6 +69,7 @@ pub(crate) struct BurnConfirmation {
     pub theme: Theme,
     pub lang: Lang,
     pub title: Option<String>,
+    /// Where the confirmation posts back to; the view that destroys the paste owns it.
     pub action: FormAction,
 }
 
