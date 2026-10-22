@@ -85,4 +85,17 @@ impl Assets {
             ),
         }
     }
+
+    /// Iterate over every asset, so routing them does not have to enumerate the fields by hand.
+    pub fn iter(&self) -> impl Iterator<Item = &Asset> {
+        [
+            &self.favicon,
+            &self.index_js,
+            &self.paste_js,
+            &self.burn_js,
+            &self.password_toggle_js,
+        ]
+        .into_iter()
+        .chain(self.css.iter())
+    }
 }

@@ -58,7 +58,7 @@ impl Encoding {
 #[derive(Clone)]
 pub(crate) struct Asset {
     /// Route that this will be served under.
-    pub route: String,
+    route: String,
     /// MIME type of this asset determined for the `ContentType` response header.
     mime: mime::Mime,
     /// Uncompressed asset content.
@@ -385,6 +385,11 @@ impl Css {
             no_js,
         }
     }
+
+    /// Iterate over all CSS assets.
+    pub fn iter(&self) -> impl Iterator<Item = &Asset> {
+        [&self.style, &self.light, &self.dark, &self.no_js].into_iter()
+    }
 }
 
 #[cfg(test)]
@@ -445,13 +450,13 @@ mod tests {
     #[test]
     fn hashed_asset() {
         let asset = Asset::new("style", Kind::Css, String::from("body {}").into_bytes());
-        assert_eq!(asset.route, "/style.62368a1a29259b30.css");
+        assert_eq!(asset.route(), "/style.62368a1a29259b30.css");
 
         let asset = Asset::new("main", Kind::Js, String::from("1 + 1").into_bytes());
-        assert_eq!(asset.route, "/main.72fce59447a01f48.js");
+        assert_eq!(asset.route(), "/main.72fce59447a01f48.js");
 
         let asset = Asset::new("icon", Kind::Png, String::from("1 + 1").into_bytes());
-        assert_eq!(asset.route, "/icon.72fce59447a01f48.png");
+        assert_eq!(asset.route(), "/icon.72fce59447a01f48.png");
     }
 
     #[test]

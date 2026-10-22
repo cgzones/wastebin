@@ -150,6 +150,19 @@ async fn handle_service_errors(
     }
 }
 
+/// Build a rate limiter refilling `per_second` tokens every second.
+fn make_ratelimiter(per_second: std::num::NonZeroU32) -> Arc<Ratelimiter> {
+    let value = per_second.get().into();
+
+    Arc::new(
+        Ratelimiter::builder(value)
+            .max_tokens(value)
+            .initial_available(value)
+            .build()
+            .expect("valid rate limiter values"),
+    )
+}
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -183,21 +196,11 @@ fn asset_route(asset: &Asset) -> MethodRouter<AppState> {
 }
 
 fn make_app(state: AppState, timeout: Duration, max_body_size: usize) -> Router {
-    let assets = [
-        &state.page.assets.favicon,
-        &state.page.assets.css.style,
-        &state.page.assets.css.dark,
-        &state.page.assets.css.light,
-        &state.page.assets.css.no_js,
-        &state.page.assets.index_js,
-        &state.page.assets.paste_js,
-        &state.page.assets.burn_js,
-        &state.page.assets.password_toggle_js,
-    ];
-
     let mut app = Router::new();
 
-    for asset in assets {
+    // Register every embedded asset under its content-hashed route, so adding an asset in
+    // `page.rs` cannot silently miss its route here.
+    for asset in state.page.assets.iter() {
         app = app.route(asset.route(), asset_route(asset));
     }
 
@@ -276,26 +279,8 @@ async fn start() -> Result<(), Box<dyn std::error::Error>> {
         max_expiration,
     ));
     let highlighter = Arc::new(wastebin_highlight::Highlighter::default());
-    let ratelimit_insert = ratelimit_insert.map(|rli| {
-        let value = rli.get().into();
-        Arc::new(
-            Ratelimiter::builder(value)
-                .max_tokens(value)
-                .initial_available(value)
-                .build()
-                .expect("valid rate limiter values"),
-        )
-    });
-    let ratelimit_delete = ratelimit_delete.map(|rld| {
-        let value = rld.get().into();
-        Arc::new(
-            Ratelimiter::builder(value)
-                .max_tokens(value)
-                .initial_available(value)
-                .build()
-                .expect("valid rate limiter values"),
-        )
-    });
+    let ratelimit_insert = ratelimit_insert.map(make_ratelimiter);
+    let ratelimit_delete = ratelimit_delete.map(make_ratelimiter);
     let state = AppState {
         db,
         cache,
