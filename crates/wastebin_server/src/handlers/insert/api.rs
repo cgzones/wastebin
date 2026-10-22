@@ -38,7 +38,8 @@ pub(crate) struct RedirectResponse {
 
 impl From<Entry> for write::Entry {
     fn from(entry: Entry) -> Self {
-        // Turn Some("") into None.
+        // An empty password would encrypt the paste with a key derived from nothing, and the
+        // password prompt rejects empty input, so the paste could never be opened again.
         let password = entry.password.and_then(|s| (!s.is_empty()).then_some(s));
 
         Self {
@@ -142,6 +143,29 @@ mod tests {
 
         let res = client.post_json().json(&entry).send().await?;
         assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn insert_with_empty_password_is_not_encrypted() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let client = Client::new(StoreCookies(false)).await;
+
+        let entry = Entry {
+            text: "FooBarBaz".to_string(),
+            password: Some(String::new()),
+            ..Default::default()
+        };
+
+        let res = client.post_json().json(&entry).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        let payload = res.json::<super::RedirectResponse>().await?;
+
+        // No password was really set, so the paste must be readable without one.
+        let res = client.get(&format!("/raw{}", payload.path)).send().await?;
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(res.text().await?, "FooBarBaz");
 
         Ok(())
     }
