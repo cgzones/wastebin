@@ -367,3 +367,65 @@ textarea.addEventListener("keydown", function(e) {
     updateStats();
   }
 });
+
+// Switching the theme is a form of its own that reloads the page, which emptied the editor. The
+// draft is kept for that one reload, in this tab only — never the password, which has to be typed
+// again. The encryption toggle is kept with it: dropping it would let the draft go out public.
+const DRAFT_KEY = "wastebin-draft";
+
+function stashDraft() {
+  const expires = form.querySelector('input[name="expires"]:checked');
+  const draft = {
+    text: textarea.value,
+    title: $("title").value,
+    extension: langSelect.value,
+    expires: expires ? expires.value : null,
+    burn: $("burn-after-reading").checked,
+    encrypt: encryptToggle ? encryptToggle.checked : false,
+  };
+
+  try {
+    sessionStorage.setItem(DRAFT_KEY, JSON.stringify(draft));
+  } catch (e) {
+    // Storage disabled or full: the theme still changes, only the draft is lost as before.
+  }
+}
+
+function restoreDraft() {
+  let draft;
+  try {
+    draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY));
+    sessionStorage.removeItem(DRAFT_KEY);
+  } catch (e) {
+    return;
+  }
+  if (!draft) return;
+
+  textarea.value = draft.text;
+  $("title").value = draft.title;
+  langSelect.value = draft.extension;
+  langFilter.value = "";
+  langFilter.dispatchEvent(new Event("input"));
+  for (const radio of form.querySelectorAll('input[name="expires"]')) {
+    radio.checked = radio.value === draft.expires;
+  }
+  $("burn-after-reading").checked = draft.burn;
+  if (encryptToggle && draft.encrypt !== encryptToggle.checked) {
+    encryptToggle.checked = draft.encrypt;
+    // Shows the password field and makes it required, as ticking it by hand does.
+    encryptToggle.dispatchEvent(new Event("change"));
+  }
+
+  updateLineNumbers();
+  updateStats();
+}
+
+for (const themeForm of document.querySelectorAll(".theme-switcher form")) {
+  themeForm.addEventListener("submit", function() {
+    if (textarea.value || $("title").value) {
+      stashDraft();
+    }
+  });
+}
+
+restoreDraft();
