@@ -580,7 +580,13 @@ impl Highlighter {
             }
         }
 
-        html.push_str(r#"</div><div class="src-code"><code>"#);
+        // Each row drops its terminator, so the rows cannot say whether the last line had one;
+        // Copy reads it from here to reproduce the paste.
+        html.push_str(if text.ends_with('\n') {
+            r#"</div><div class="src-code"><code data-trailing-newline>"#
+        } else {
+            r#"</div><div class="src-code"><code>"#
+        });
 
         let mut budget = Budget::new();
 
@@ -1179,6 +1185,34 @@ mod tests {
                 "line terminator leaked into a row: {row}"
             );
         }
+        Ok(())
+    }
+
+    /// A row holds its line without the terminator, so the rows alone cannot tell `a` from
+    /// `a\n` and Copy dropped the paste's final line break. The code element carries it instead.
+    #[test]
+    fn the_code_says_whether_the_paste_ends_in_a_newline() -> Result<(), Box<dyn std::error::Error>>
+    {
+        for (text, ends_in_newline) in [
+            ("", false),
+            ("  a  ", false),
+            ("  a  \n", true),
+            ("a\n\n", true),
+            ("a\r\n", true),
+        ] {
+            let html = highlight_string(text, "txt")?;
+            assert_eq!(
+                html.contains("<code data-trailing-newline>"),
+                ends_in_newline,
+                "{text:?}: {html}"
+            );
+        }
+
+        // Indentation and trailing spaces stay in the row Copy reads.
+        let html = highlight_string("  a  \n", "txt")?;
+        let (_, code) = html.split_once("<code").expect("rendered rows");
+        assert!(code.contains("  a  "), "{code}");
+
         Ok(())
     }
 

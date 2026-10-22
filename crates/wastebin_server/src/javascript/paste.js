@@ -78,10 +78,12 @@ function copy() {
   if (!code) return;
   // Every row is a block element holding one line without its terminator.
   // `textContent` drops the breaks between block elements along with it, so
-  // join the rows by hand.
-  const content = Array.from(code.querySelectorAll('[id^="LC"]'), row => row.textContent)
-    .join('\n')
-    .trim();
+  // join the rows by hand, and take the last one's from the code element. The
+  // paste is copied as it is: trimming it lost the first line's indentation
+  // and the last line's trailing whitespace.
+  let content = Array.from(code.querySelectorAll('[id^="LC"]'), row => row.textContent)
+    .join('\n');
+  if (code.hasAttribute('data-trailing-newline')) content += '\n';
 
   navigator.clipboard.writeText(content)
     .then(() => {
