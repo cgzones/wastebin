@@ -62,6 +62,26 @@ mod tests {
 
     use reqwest::{StatusCode, header};
 
+    /// The page that reveals a burned paste is the only one it ever gets, so it has to work.
+    ///
+    /// It used to leave out the Copy button along with the actions that need the paste to still
+    /// exist, and the script dereferenced the button on load and threw: line highlighting never
+    /// ran, and wrapping and copying the URL failed on constants that were never initialised. The
+    /// id stays off the page instead, since the routes the shortcuts build from it would only
+    /// answer 404 now — and so do the shortcuts from the list, which would only do nothing.
+    fn assert_revealed_page_works(body: &str) {
+        assert!(body.contains(r#"id="copy-button""#), "{body}");
+        assert!(!body.contains("data-paste-id"), "{body}");
+
+        for gone in ["p", "r", "d", "q", "m"] {
+            assert!(
+                !body.contains(&format!("<kbd>{gone}</kbd>")),
+                "{gone}: {body}"
+            );
+        }
+        assert!(body.contains("<kbd>w</kbd>"), "{body}");
+    }
+
     /// The page has to exist for this to prove anything: once a missing paste answers with the
     /// error page, an id that was never inserted would pass simply by rendering nothing.
     #[tokio::test]
@@ -181,7 +201,9 @@ mod tests {
             .await?;
 
         assert_eq!(res.status(), StatusCode::OK);
-        assert!(res.text().await?.contains("secret-body-xyz"));
+        let body = res.text().await?;
+        assert!(body.contains("secret-body-xyz"));
+        assert_revealed_page_works(&body);
 
         // Subsequent GETs 404 — the paste was burned.
         let res = client
@@ -298,7 +320,9 @@ mod tests {
 
         assert_eq!(res.status(), StatusCode::OK);
         let cache_control = res.headers().get(header::CACHE_CONTROL).cloned();
-        assert!(res.text().await?.contains("secret-body-xyz"));
+        let body = res.text().await?;
+        assert!(body.contains("secret-body-xyz"));
+        assert_revealed_page_works(&body);
         assert_eq!(cache_control.unwrap(), "no-store");
 
         let res = client

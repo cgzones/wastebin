@@ -3,10 +3,12 @@ function $(id) {
 }
 
 document.addEventListener('keydown', onKey);
+// Not every paste page has a Copy button. Reaching through a missing one threw before anything
+// below ran, which left wrapping, line highlighting and the later shortcuts dead.
 const copyButton = $("copy-button");
-copyButton.addEventListener("click", copy);
-const TOAST_CONTENT = copyButton.dataset.toastContent;
-const TOAST_URL = copyButton.dataset.toastUrl;
+if (copyButton) copyButton.addEventListener("click", copy);
+const TOAST_CONTENT = document.body.dataset.toastContent;
+const TOAST_URL = document.body.dataset.toastUrl;
 
 function highlightLines(scroll) {
   document.querySelectorAll('.line-highlight').forEach(el => {
