@@ -228,6 +228,7 @@ impl Highlighter {
 
         for (line_idx, line) in LinesWithEndings::from(&text).enumerate() {
             let (formatted, delta) = if line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF {
+                // Too long to highlight, but it still goes into the page verbatim otherwise.
                 let mut escaped = String::with_capacity(line.len());
                 escape(line, &mut escaped);
                 (escaped, 0)
@@ -338,6 +339,25 @@ impl Html {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_lines_are_escaped() -> Result<(), Box<dyn std::error::Error>> {
+        let highlighter = Highlighter::default();
+        let line = format!(
+            "{}<script>alert(1)</script>",
+            "a".repeat(HIGHLIGHT_LINE_LENGTH_CUTOFF)
+        );
+        assert!(line.len() > HIGHLIGHT_LINE_LENGTH_CUTOFF);
+
+        let html = highlighter
+            .highlight(line, Some("txt".into()))?
+            .into_inner();
+
+        assert!(!html.contains("<script>"), "raw markup leaked: {html}");
+        assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+
+        Ok(())
+    }
 
     #[test]
     fn markdown_detection_follows_the_syntax_set() {
@@ -458,7 +478,7 @@ mod tests {
     }
 
     #[test]
-    fn long_lines_are_escaped() -> Result<(), Box<dyn std::error::Error>> {
+    fn long_markdown_lines_are_escaped() -> Result<(), Box<dyn std::error::Error>> {
         let mut text = "x".repeat(HIGHLIGHT_LINE_LENGTH_CUTOFF);
         text.push_str("<img src=x>");
         let html = Highlighter::default()
