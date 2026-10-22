@@ -125,8 +125,11 @@ function onKey(e) {
   else if (e.key == 'q' && pasteId) {
     window.location.href = "/qr/" + pasteId;
   }
-  else if (e.key == 'p') {
-    window.location.href = window.location.href.split("?")[0];
+  else if (e.key == 'p' && pasteId) {
+    // The rendered and QR views live under a prefix of their own, so stripping the query left
+    // them where they were. On the source view the fragment names the lines in view, so keep it.
+    const source = "/" + pasteId;
+    window.location.href = window.location.pathname === source ? source + window.location.hash : source;
   }
   else if (e.key == 'c' && copyButton) {
     copy();
