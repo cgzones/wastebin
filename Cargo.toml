@@ -35,6 +35,11 @@ unicode_not_nfc = "deny"
 unwrap_used = "deny"
 used_underscore_binding = "deny"
 
+[profile.dev]
+# Keep file/line information in backtraces without generating full variable debug info.
+# The test profile inherits this setting too.
+debug = "line-tables-only"
+
 [profile.dev.package.rust-argon2]
 opt-level = 3
 
